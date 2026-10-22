@@ -24,11 +24,22 @@ Dataset (LoveDA layout, 6.1 GB, 4191 tiles) lives on SCC — train there, read i
 - Starter loader: `/projectnb/ec523kb/projects/RoadSeg/code/dataset.py` (7-class; we binarize: 3 = road, 0 = ignore).
 - Don't copy data into your SCC home (10 GB quota); use `/projectnb`.
 
-Local dev slice (`project_a/data/`, gitignored, ~70 MB): first 25 urban + 25 rural Val tiles:
+### Local dev slice
+For debugging the loop, metrics and visualizations on a laptop, pull a small slice
+(requires the `scc` SSH alias above):
 ```
-ssh scc 'cd /projectnb/ec523kb/projects/RoadSeg/dataset && for a in Urban Rural; do ls Val/$a/images_png | sort | head -25 | while read f; do echo Val/$a/images_png/$f; echo Val/$a/masks_png/$f; done; done' > /tmp/slice.txt
-rsync -a --files-from=/tmp/slice.txt scc:/projectnb/ec523kb/projects/RoadSeg/dataset/ project_a/data/
+scripts/fetch_data_slice.sh            # 25 Urban + 25 Rural Val tiles (~70 MB)
+scripts/fetch_data_slice.sh 10 Train   # 10 + 10 Train tiles
 ```
+Args: `[N per domain=25] [SPLIT=Val|Train] [HOST=scc]`. It takes the first N tiles
+by sorted filename, so everyone running the same command gets the same files.
+Output goes to `project_a/data/<SPLIT>/{Urban,Rural}/{images_png,masks_png}/` (gitignored).
+
+**Current shared dev slice (Francesco):** `scripts/fetch_data_slice.sh` with defaults,
+i.e. the first 25 Urban + 25 Rural tiles of **Val** (100 files, 69 MB). Use the same
+command so local results are comparable. This is development data from Val, not the
+staff evaluation set (whose labels we never see). Full training and model selection
+run on SCC against the complete Train/Val folders.
 
 ## Environment
 `pip install -r requirements_mac.txt` (or `requirements_scc.txt`); both pin `project_a/cli/requirements.txt` for now.
