@@ -1,5 +1,38 @@
 # BU Deep Learning Project #1
 
+## SCC access (key-based, no stored password)
+One-time setup, run in your own terminal (needs password + Duo once):
+```
+ssh-copy-id -i ~/.ssh/id_ed25519.pub <BU_USER>@scc1.bu.edu
+```
+Add to `~/.ssh/config`:
+```
+Host scc
+    HostName scc1.bu.edu
+    User <BU_USER>
+    IdentityFile ~/.ssh/id_ed25519
+    ControlMaster auto
+    ControlPath ~/.ssh/cm-%r@%h:%p
+    ControlPersist 4h
+```
+Then `ssh scc` and `rsync scc:...` work without a password.
+
+## Data
+Dataset (LoveDA layout, 6.1 GB, 4191 tiles) lives on SCC — train there, read it in place:
+`/projectnb/ec523kb/projects/RoadSeg/dataset/{Train,Val}/{Urban,Rural}/{images_png,masks_png}`
+- Train: 1156 urban + 1366 rural; Val: 677 urban + 992 rural. No test split (staff hold evaluation labels).
+- Starter loader: `/projectnb/ec523kb/projects/RoadSeg/code/dataset.py` (7-class; we binarize: 3 = road, 0 = ignore).
+- Don't copy data into your SCC home (10 GB quota); use `/projectnb`.
+
+Local dev slice (`project_a/data/`, gitignored, ~70 MB): first 25 urban + 25 rural Val tiles:
+```
+ssh scc 'cd /projectnb/ec523kb/projects/RoadSeg/dataset && for a in Urban Rural; do ls Val/$a/images_png | sort | head -25 | while read f; do echo Val/$a/images_png/$f; echo Val/$a/masks_png/$f; done; done' > /tmp/slice.txt
+rsync -a --files-from=/tmp/slice.txt scc:/projectnb/ec523kb/projects/RoadSeg/dataset/ project_a/data/
+```
+
+## Environment
+`pip install -r requirements_mac.txt` (or `requirements_scc.txt`); both pin `project_a/cli/requirements.txt` for now.
+
 # EC523 Project A — Team To-Do List
 
 ## Setup & Unblocking

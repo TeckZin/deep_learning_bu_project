@@ -1,2 +1,20 @@
 .DS_Store
 .env
+
+# Data and outputs (fetch data from SCC; see README)
+data/
+smoke_outputs/
+predictions/
+
+# Checkpoints
+*.safetensors
+*.pt
+*.pth
+*.ckpt
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.ipynb_checkpoints/
