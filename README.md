@@ -2,6 +2,8 @@
 
 # EC523 Project A — Team To-Do List
 
+![Looped refiner workflow](docs/workflow.png)
+
 ## Setup & Unblocking
 - [ ] Ask staff: release of trained baseline + data package, feature contract (C, grid stride), tile policy, final resource caps, GPU access
 - [ ] Set up Python 3.12 env, install `cli/requirements.txt`
