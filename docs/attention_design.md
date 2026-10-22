@@ -57,11 +57,14 @@ positions: token `k` in each stream is the same 16×16 patch.
 
 ```
 h = z_t + X + A_t                    [N, d]
-Q, J, V all from h                   scores: N × N   (4096² ≈ 16.8M per head)
-z_{t+1} = h + Attn(h) → + FFN
+Q = h·W_Q, J = h·W_J, V = h·W_V      [N, d_h] each   (projection)
+O = softmax(Q·Jᵀ/√d_h)·V             [N, d_h]        scores: N × N
+z_{t+1} = h + O·W_O → + FFN          [N, d]
 ```
 - **Intuition:** every location talks to every other location, but each location first
   blends what it sees, what it predicted, and what it remembers into one vector.
+- **Relation to TRM:** this is how TRM itself combines its input, answer, and latent: it
+  adds their embeddings before its shared network (TRM, Fig. 1; cited in handout §12).
 - **Pros:** cheapest; trivially grid-aligned; simplest to implement.
 - **Cons:** the model can't query the streams separately (e.g. "give me image evidence,
   not your old answer"); the image signal is re-added every step and can dominate or wash
@@ -70,9 +73,10 @@ z_{t+1} = h + Attn(h) → + FFN
 ### Option 2: Concatenate, then self-attention
 
 ```
-h = [X ; A_t ; z_t]                  [3N, d]
-Q, J, V all from h                   scores: 3N × 3N  (≈ 151M per head, 9× option 1)
-z_{t+1} = memory part of the output
+H = [X ; A_t ; z_t]                  [3N, d]
+Q = H·W_Q, J = H·W_J, V = H·W_V      [3N, d_h] each  (projection)
+O = softmax(Q·Jᵀ/√d_h)·V             [3N, d_h]       scores: 3N × 3N
+z_{t+1} = z_t + O[memory rows]·W_O   [N, d]
 ```
 - **Intuition:** one big conversation in which every token can pick whom to listen to,
   whether image, answer, or memory.
@@ -80,21 +84,112 @@ z_{t+1} = memory part of the output
 - **Cons:** 9× the attention cost; image and answer tokens also get updated, and those
   outputs are thrown away; streams need type embeddings so the model can tell them apart.
 
-### Option 3: Cross-attention, where memory reads the evidence (Perceiver / TRM-style)
+### Option 3: Cross-attention, where memory reads the evidence
 
 ```
-Q    from z_t                        [N, d]    memory asks
-J, V from [X ; A_t]                  [2N, d]   image + current answer respond
-scores: N × 2N  (≈ 33.5M per head)
-z' = z_t + CrossAttn(z_t, [X ; A_t])
+M = [X ; A_t]                        [2N, d]         image + current answer
+Q = z_t·W_Q                          [N, d_h]        memory asks       (projection)
+J = M·W_J, V = M·W_V                 [2N, d_h] each  evidence responds (projection)
+O = softmax(Q·Jᵀ/√d_h)·V             [N, d_h]        scores: N × 2N
+z' = z_t + O·W_O                     [N, d]
 z'' = z' + SelfAttn(z')              (optional: memory ↔ memory talk)
 z_{t+1} = z'' + FFN(z'')
 ```
 - **Intuition:** memory is the thing being updated; the image and the current answer are
   evidence it consults. Roles are explicit.
-- **Pros:** clean separation; image keys/values can be cached across steps (see §4);
-  closest to TRM's input / answer / latent split and to Perceiver.
+- **Where it comes from:** the input / answer / latent separation is from TRM
+  (Jolicoeur-Martineau, 2025), the recursive-reasoning paper cited in the project handout
+  (§12). TRM itself sums the three (see option 1); giving memory its own queries over the
+  input via cross-attention is the Perceiver mechanism (Jaegle et al., 2021).
+- **Pros:** clean separation; image keys/values can be cached across steps (see §4).
 - **Cons:** more pieces than option 1; 2× option 1's score matrix if done globally.
+
+### The linear algebra (single head)
+
+$N$ tokens per stream, width $d$, head width $d_h$; $W_Q, W_J, W_V \in \mathbb{R}^{d\times d_h}$
+are learned and shared across loop steps; softmax is row-wise.
+
+**Option 1: add, then self-attention**
+
+$$
+h = z_t + X + A_t \in \mathbb{R}^{N\times d}
+$$
+$$
+Q = hW_Q,\quad J = hW_J,\quad V = hW_V \in \mathbb{R}^{N\times d_h}
+$$
+$$
+S = \frac{QJ^\top}{\sqrt{d_h}} \in \mathbb{R}^{N\times N},\qquad
+O = \operatorname{softmax}(S)\,V \in \mathbb{R}^{N\times d_h}
+$$
+$$
+z_{t+1} = h + O\,W_O \;(\to +\,\text{FFN})
+$$
+
+A single score is $S_{ij} = h_i^\top (W_Q W_J^\top)\, h_j / \sqrt{d_h}$. Since each
+$h_i = z_i + x_i + a_i$, it expands into 9 cross terms ($z\cdot z$, $z\cdot x$, $x\cdot a$, …)
+that all share one weight matrix. That is the precise sense in which adding first "blends"
+the streams: the model can't weight image-to-memory matches differently from
+answer-to-memory matches.
+
+**Option 2: concatenate (stack rows), then self-attention**
+
+$$
+H = \begin{bmatrix} X \\ A_t \\ z_t \end{bmatrix} \in \mathbb{R}^{3N\times d}
+\quad(\text{+ a learned type embedding per stream})
+$$
+$$
+Q = HW_Q,\quad J = HW_J,\quad V = HW_V \in \mathbb{R}^{3N\times d_h}
+$$
+$$
+S = \frac{QJ^\top}{\sqrt{d_h}} =
+\begin{bmatrix}
+S_{XX} & S_{XA} & S_{Xz}\\
+S_{AX} & S_{AA} & S_{Az}\\
+S_{zX} & S_{zA} & S_{zz}
+\end{bmatrix} \in \mathbb{R}^{3N\times 3N},\quad \text{each block } N\times N
+$$
+$$
+O = \operatorname{softmax}(S)\,V \in \mathbb{R}^{3N\times d_h},\qquad
+z_{t+1} = z_t + O_{[2N:3N]}\,W_O
+$$
+
+Only the memory rows of $O$ are kept, and they depend only on the bottom row of blocks
+$[S_{zX}\; S_{zA}\; S_{zz}]$. That is exactly cross-attention from $z$ to all three streams
+($X$, $A$, $z$). The other two rows of blocks are wasted compute in a one-layer core; they
+only matter in a multi-layer core, where the updated $X$ and $A$ feed the next layer.
+
+**Option 3: cross-attention (memory queries, evidence keys and values)**
+
+$$
+M = \begin{bmatrix} X \\ A_t \end{bmatrix} \in \mathbb{R}^{2N\times d}
+$$
+$$
+Q = z_t W_Q \in \mathbb{R}^{N\times d_h},\qquad
+J = MW_J,\quad V = MW_V \in \mathbb{R}^{2N\times d_h}
+$$
+$$
+S = \frac{1}{\sqrt{d_h}}\big[\, QJ_X^\top \;\big|\; QJ_A^\top \,\big] \in \mathbb{R}^{N\times 2N}
+$$
+$$
+P = \operatorname{softmax}(S) = [\,P_X \mid P_A\,],\qquad
+O = PV = P_X V_X + P_A V_A \in \mathbb{R}^{N\times d_h}
+$$
+$$
+z_{t+1} = z_t + O\,W_O \;(\to \text{optional self-attention on } z \to +\,\text{FFN})
+$$
+
+- **Shared budget:** the softmax runs over all $2N$ keys together, so image and answer
+  evidence compete for the same attention (each row of $P$ sums to 1 overall).
+- **The output splits cleanly:** $P_X V_X$ is "what I took from the image";
+  $P_A V_A$ is "what I took from the current mask".
+- **Cacheable:** $J_X = XW_J$ and $V_X = XW_V$ are the same every step, so compute them
+  once; each step recomputes only $Q$, $J_A$, $V_A$.
+
+| | Queries from | Keys/values from | Score matrix | Output rows |
+|---|---|---|---|---|
+| Option 1 | $h$ ($N$) | $h$ ($N$) | $N\times N$ | $N$ |
+| Option 2 | $H$ ($3N$) | $H$ ($3N$) | $3N\times 3N$ | $3N$, keep $N$ |
+| Option 3 | $z$ ($N$) | $M$ ($2N$) | $N\times 2N$ | $N$ |
 
 ## 4. Cross-attention in detail
 
@@ -152,18 +247,9 @@ Queries and keys both carry grid positions, so position goes into the `Q·Jᵀ` 
 - Prefer relative encodings: training crops (32×32) and full tiles (64×64) then share the
   same notion of "3 cells to the north-east". See the experiment ideas in the README.
 
-### Cost and windowing
-Score matrix per head per step, fp16:
-
-| Variant | Scores per head | Memory per head |
-|---|---|---|
-| Option 1, global, full tile | 4096 × 4096 | ≈ 34 MB |
-| Option 3, global, full tile | 4096 × 8192 | ≈ 67 MB |
-| Option 2, global, full tile | 12288 × 12288 | ≈ 302 MB |
-| Option 3, 512 crop | 1024 × 2048 | ≈ 4 MB |
-
-Training stores activations for every unrolled step (× heads × K × batch), so this
-multiplies quickly. **Windowed cross-attention** (each memory token attends only to
+### Windowing
+Global attention scores every query against every key, and training stores this for every
+unrolled step. **Windowed cross-attention** (each memory token attends only to
 image/answer tokens in a local window, e.g. 8×8 cells) cuts cost to `N × 2·64` and adds a
 locality prior. Long-range links then come from shifted windows, a few global tokens, or
 the loop itself: information can travel one window further per step, which is itself a
@@ -199,6 +285,6 @@ Keep option 1 (the starter) as the simple baseline to compare against.
 - DETR (Carion et al., 2020), arXiv:2005.12872: learned query tokens, positions added in
   every attention layer
 - Swin Transformer (Liu et al., 2021), arXiv:2103.14030: window attention, relative bias
-- TRM (Jolicoeur-Martineau, 2025), arXiv:2510.04871: separate input / answer / latent
+- TRM (Jolicoeur-Martineau, 2025), arXiv:2510.04871 (cited in the handout): separate input / answer / latent
 
 (arXiv IDs from memory; verify before citing.)
