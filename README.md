@@ -1,5 +1,10 @@
 # BU Deep Learning Project #1
 
+# Diagrams
+
+![Looped refiner workflow](docs/workflow.svg)
+![Transfoermer core](docs/transformer_core.png)
+
 ## SCC access (key-based, no stored password)
 One-time setup, run in your own terminal (needs password + Duo once):
 ```
@@ -43,11 +48,11 @@ Output goes to `project_a/data/<SPLIT>/{Urban,Rural}/{images_png,masks_png}/` (g
 | `scripts/fetch_data_slice.sh` | first 25 Urban + 25 Rural **Val** tiles (100 files) | 69 MB | Evaluation only: metrics, K sweeps, baseline comparison, visualizing masks |
 
 ## Environment
-`pip install -r requirements_mac.txt` (or `requirements_scc.txt`); both pin `project_a/cli/requirements.txt` for now.
+`pip install -r requirements_mac.txt` (or `requirements_scc.txt`, which pulls in `project_a/cli/requirements.txt`).
 
 ## Docs and readings
 - Project handout: `project_a/handout/project_a.pdf`
-- Sep 28 pitch slides: `doc/Sep28_Project_Pitch.pdf`
+- Sep 28 pitch slides: `docs/Sep28_Project_Pitch.pdf`
 
 Core papers (handout §12):
 - Universal Transformers (Dehghani et al., ICLR 2019) — https://arxiv.org/abs/1807.03819
