@@ -30,6 +30,35 @@ While it's open (and for up to 4h after), `ssh scc`, `rsync scc:...` and
 An SSH key (`ssh-copy-id`) did not remove the password/Duo prompt off campus in our testing,
 so it's optional.
 
+## Team folder on SCC
+`/projectnb/ec523kb/projects/CowenZeollaZinTan/`
+
+Private to the team via ACLs: `fdzeolla`, `samc`, `tant1` read/write; course staff
+(`ec523kbta` group, `wd2119`) read-only; rest of the class has no access. New files inherit
+these rules (check with `getfacl <path>`).
+```
+CowenZeollaZinTan/
+├── code/
+│   ├── fdzeolla/deep_learning_bu_project   # each member's own clone of this repo
+│   ├── samc/
+│   └── tant1/
+├── cache/        # precomputed encoder outputs (f, y0) — shared, large
+├── checkpoints/  # trained weights; name by commit + seed
+└── runs/         # logs, metrics, prediction samples
+```
+- **One clone per person** under `code/<BU_USER>/`; only edit your own. A shared clone means
+  colliding edits/branches and git "dubious ownership" errors across users.
+  ```
+  mkdir -p /projectnb/ec523kb/projects/CowenZeollaZinTan/code/$USER && cd $_
+  git clone https://github.com/TeckZin/deep_learning_bu_project.git
+  ```
+- Simplest workflow: write code locally, `git push`, then `git pull` on SCC before running jobs.
+  Pushing *from* SCC needs a GitHub SSH key generated on SCC (or a token).
+- Read the dataset in place (see Data below); don't copy it into the team folder.
+- Copying files in: use `rsync -rlt` or plain `cp` (not `rsync -a` / `cp -p`), so files keep the
+  team permissions.
+- Run training as batch jobs (`qsub`), not on the login node.
+
 ## Data
 Dataset (LoveDA layout, 6.1 GB, 4191 tiles) lives on SCC — train there, read it in place:
 `/projectnb/ec523kb/projects/RoadSeg/dataset/{Train,Val}/{Urban,Rural}/{images_png,masks_png}`
