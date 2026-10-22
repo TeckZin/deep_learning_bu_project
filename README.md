@@ -35,11 +35,17 @@ Args: `[N per domain=25] [SPLIT=Val|Train] [HOST=scc]`. It takes the first N til
 by sorted filename, so everyone running the same command gets the same files.
 Output goes to `project_a/data/<SPLIT>/{Urban,Rural}/{images_png,masks_png}/` (gitignored).
 
-**Current shared dev slice (Francesco):** `scripts/fetch_data_slice.sh` with defaults,
-i.e. the first 25 Urban + 25 Rural tiles of **Val** (100 files, 69 MB). Use the same
-command so local results are comparable. This is development data from Val, not the
-staff evaluation set (whose labels we never see). Full training and model selection
-run on SCC against the complete Train/Val folders.
+**Current shared local slices (Francesco)** — run both so local results are comparable:
+
+| Command | Slice | Size | Use it for |
+|---|---|---|---|
+| `scripts/fetch_data_slice.sh 10 Train` | first 10 Urban + 10 Rural **Train** tiles (40 files) | 29 MB | Overfit tests and training-loop debugging (gradients, ignore mask, feedback) |
+| `scripts/fetch_data_slice.sh` | first 25 Urban + 25 Rural **Val** tiles (100 files) | 69 MB | Evaluation only: metrics, K sweeps, baseline comparison, visualizing masks |
+
+Never train on the Val slice — Val is our development set for choosing settings and
+checkpoints, so training on it inflates dev scores. Neither slice is the staff
+evaluation set (whose labels we never see). Real training and model selection run on
+SCC against the complete Train/Val folders.
 
 ## Environment
 `pip install -r requirements_mac.txt` (or `requirements_scc.txt`); both pin `project_a/cli/requirements.txt` for now.
