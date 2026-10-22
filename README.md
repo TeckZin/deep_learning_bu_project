@@ -115,6 +115,15 @@ Metrics and data:
 - [ ] **4. Design ablation:** one hypothesis-driven change, with predicted outcome written before running
 - [ ] **5. Failures & uncertainty:** unselected successes/failures (false connections, vanishing roads, later-step degradation); 3 seeds or paired bootstrap intervals
 
+## Potential Experiment Ideas
+Candidates for the design ablation (#4) or extra analysis. Write the predicted outcome before running.
+- [ ] **Strong vs. weak encoder:** run the K-sweep and state/feedback ablations on two frozen encoders (e.g. a large pretrained backbone and a smaller/weaker one), each with its own y0.
+  Hypotheses: "refinement helps more when the initial mask is worse"; "refinement mainly helps thin and occluded roads" (check with per-road-width and stress-family breakdowns).
+- [ ] **Relative vs. absolute position encoding in the core:** 2D RoPE or a Swin-style relative position bias (re-applied in every attention call, so every loop step) vs. absolute 2D embeddings / coordinate channels added once.
+  Hypothesis: relative encoding transfers better from 512 crops (32×32 tokens) to full 1024 tiles (64×64 tokens) and keeps position from washing out of z over K steps.
+  Note: the demo's coordinate channels span [-1, 1] over whatever input it gets, so their scale differs between crops and full tiles.
+- [ ] **Local (window) vs. global attention:** test whether long-range context is what closes gaps and removes false bridges.
+
 ## Final Submission
 - [ ] One nominated checkpoint + source code
 - [ ] Pinned environment and training instructions
