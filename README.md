@@ -45,6 +45,20 @@ Output goes to `project_a/data/<SPLIT>/{Urban,Rural}/{images_png,masks_png}/` (g
 ## Environment
 `pip install -r requirements_mac.txt` (or `requirements_scc.txt`); both pin `project_a/cli/requirements.txt` for now.
 
+## Docs and readings
+- Project handout: `project_a/handout/project_a.pdf`
+- Sep 28 pitch slides: `doc/Sep28_Project_Pitch.pdf`
+
+Core papers (handout §12):
+- Universal Transformers (Dehghani et al., ICLR 2019) — https://arxiv.org/abs/1807.03819
+- Less is More: Recursive Reasoning with Tiny Networks (TRM, Jolicoeur-Martineau, 2025) — https://arxiv.org/abs/2510.04871
+- Recurrent Scene Parsing with Perspective Understanding in the Loop (Kong & Fowlkes, CVPR 2018) — https://arxiv.org/abs/1705.07238
+
+Metrics and data:
+- clDice (Shit et al., CVPR 2021) — https://arxiv.org/abs/2003.07311
+- Boundary IoU (Cheng et al., CVPR 2021) — https://arxiv.org/abs/2103.16562
+- LoveDA dataset (Wang et al., NeurIPS 2021 D&B) — https://arxiv.org/abs/2110.08733
+
 # EC523 Project A — Team To-Do List
 
 ## Setup & Unblocking
