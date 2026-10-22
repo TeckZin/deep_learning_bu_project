@@ -90,6 +90,7 @@ Output goes to `project_a/data/<SPLIT>/{Urban,Rural}/{images_png,masks_png}/` (g
 ## Docs and readings
 - Project handout: `project_a/handout/project_a.pdf`
 - Sep 28 pitch slides: `docs/Sep28_Project_Pitch.pdf`
+- Attention design options (self vs. concat vs. cross-attention, shapes, cost): `docs/attention_design.md`
 
 Core papers (handout §12):
 - Universal Transformers (Dehghani et al., ICLR 2019) — https://arxiv.org/abs/1807.03819
