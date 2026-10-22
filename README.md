@@ -1,9 +1,11 @@
 # BU Deep Learning Project #1
 
-# EC523 Project A — Team To-Do List
+# Diagrams
 
 ![Looped refiner workflow](docs/workflow.svg)
 ![Transfoermer core](docs/transformer_core.png)
+
+# EC523 Project A — Team To-Do List
 
 ## Setup & Unblocking
 - [ ] Ask staff: release of trained baseline + data package, feature contract (C, grid stride), tile policy, final resource caps, GPU access
