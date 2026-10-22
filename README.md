@@ -2,7 +2,7 @@
 
 # EC523 Project A — Team To-Do List
 
-![Looped refiner workflow](docs/workflow.png)
+![Looped refiner workflow](docs/workflow.svg)
 
 ## Setup & Unblocking
 - [ ] Ask staff: release of trained baseline + data package, feature contract (C, grid stride), tile policy, final resource caps, GPU access
