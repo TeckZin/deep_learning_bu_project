@@ -5,11 +5,10 @@
 ![Looped refiner workflow](docs/workflow.svg)
 ![Transfoermer core](docs/transformer_core.png)
 
-## SCC access (key-based, no stored password)
-One-time setup, run in your own terminal (needs password + Duo once):
-```
-ssh-copy-id -i ~/.ssh/id_ed25519.pub <BU_USER>@scc1.bu.edu
-```
+## SCC access (reusable Duo session, no stored password)
+SCC asks for password + Duo on every *new* connection (an SSH key alone is not enough,
+at least off campus). The config below lets one approved login be reused for 4 hours.
+
 Add to `~/.ssh/config`:
 ```
 Host scc
@@ -20,7 +19,16 @@ Host scc
     ControlPath ~/.ssh/cm-%r@%h:%p
     ControlPersist 4h
 ```
-Then `ssh scc` and `rsync scc:...` work without a password.
+Then, in a separate terminal, open the shared session and leave it running:
+```
+ssh -N scc        # enter password + approve Duo once
+```
+While it's open (and for up to 4h after), `ssh scc`, `rsync scc:...` and
+`scripts/fetch_data_slice.sh` reuse it with no prompts. If they fail with
+`Permission denied (keyboard-interactive,hostbased)`, the session has expired; rerun `ssh -N scc`.
+
+An SSH key (`ssh-copy-id`) did not remove the password/Duo prompt off campus in our testing,
+so it's optional.
 
 ## Data
 Dataset (LoveDA layout, 6.1 GB, 4191 tiles) lives on SCC — train there, read it in place:
