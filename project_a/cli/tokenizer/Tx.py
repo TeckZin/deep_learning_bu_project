@@ -27,3 +27,12 @@ class Tx(nn.Module):
         x = x + pos2d(h, w, d, x.device)
         x = self.norm(x)
         return x
+
+
+if __name__ == "__main__":
+    model = Tx(c_in=64, d=256)
+    f = torch.randn(2, 64, 8, 10)
+    out = model(f)
+    print("input :", tuple(f.shape))
+    print("output:", tuple(out.shape))
+    print("pos2d :", tuple(pos2d(8, 10, 256).shape))
