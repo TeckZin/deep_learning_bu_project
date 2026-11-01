@@ -1,8 +1,6 @@
 import torch
 from torch import nn
-
-from Tx import pos2d
-
+from tokenizer.Tx import pos2d
 
 class Ty(nn.Module):
 
