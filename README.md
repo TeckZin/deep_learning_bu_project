@@ -1,5 +1,14 @@
 # BU Deep Learning Project #1
 
+## Midway training and inference
+
+The temporary ResNet18/U-Net baseline, recurrent refiner using Teck's tokenizer,
+two-stage training commands, and SCC submission scripts are documented in
+[the midway runbook](docs/midway.md). Start with `scripts/scc_config.example.sh`
+and a smoke GPU job. Exported bundles support single-image and folder inference
+without downloading model weights. This temporary baseline is separate from the
+staff-owned final baseline adapter.
+
 # Diagrams
 
 ![Looped refiner workflow](docs/workflow.svg)

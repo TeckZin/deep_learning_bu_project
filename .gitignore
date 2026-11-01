@@ -18,3 +18,11 @@ __pycache__/
 .venv/
 venv/
 .ipynb_checkpoints/
+
+# Midway training artifacts and per-user SCC settings
+runs/
+bundles/
+*.egg-info/
+build/
+dist/
+scripts/scc_config.local.sh

@@ -1,9 +1,9 @@
 import torch
 from torch import nn
-from torch.nn import functional as F
 
 
 def pos2d(h, w, d, device=None):
+    """Return deterministic sine/cosine positions in row-major grid order."""
     assert d % 4 == 0
     y = torch.arange(h, device=device).repeat_interleave(w)
     x = torch.arange(w, device=device).repeat(h)
@@ -13,6 +13,7 @@ def pos2d(h, w, d, device=None):
     return torch.cat([x.sin(), x.cos(), y.sin(), y.cos()], dim=1)
 
 class Tx(nn.Module):
+    """Teck's image tokenizer: BCHW features to B(HW)d spatial tokens."""
 
     def __init__(self, c_in, d=256) -> None:
         super().__init__()
@@ -22,8 +23,9 @@ class Tx(nn.Module):
 
     def forward(self, f):
         x = self.proj(f)
-        B, d, h, w = x.shape
+        _, d, h, w = x.shape
         x = x.flatten(2).transpose(1, 2)
-        x = x + pos2d(h, w, d, x.device)
+        # Avoid promoting AMP activations back to float32 throughout the core.
+        x = x + pos2d(h, w, d, x.device).to(dtype=x.dtype)
         x = self.norm(x)
         return x

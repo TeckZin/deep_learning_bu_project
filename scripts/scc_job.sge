@@ -1,0 +1,39 @@
+#!/bin/bash -l
+# Called by scc_submit.sh; resources and log destinations are supplied by qsub.
+set -euo pipefail
+source "${SCC_CONFIG:?Submit via scripts/scc_submit.sh}"
+if [[ -n "${SCC_PYTHON_MODULE:-}" ]]; then
+    module load "$SCC_PYTHON_MODULE"
+fi
+source "$SCC_ENV/bin/activate"
+cd "$SCC_REPO"
+export OMP_NUM_THREADS="${NSLOTS:-4}"
+export MKL_NUM_THREADS="${NSLOTS:-4}"
+export MPLCONFIGDIR="$SCC_RUN_DIR/matplotlib"
+export PYTHONUNBUFFERED=1
+export HF_HUB_OFFLINE=1
+export CUBLAS_WORKSPACE_CONFIG=:4096:8
+python -m road_refinement check --data-root "$DATA_ROOT" --encoder-weights "$ENCODER_WEIGHTS" --require-cuda
+options=(--data-root "$DATA_ROOT" --run-dir "$SCC_RUN_DIR" --encoder-weights "$ENCODER_WEIGHTS"
+    --device cuda --baseline-updates "$SCC_BASELINE_UPDATES" --refiner-updates "$SCC_REFINER_UPDATES")
+if [[ "$SCC_MODE" == smoke ]]; then
+    options+=(--baseline-updates 10 --refiner-updates 10 --crop-size 128
+        --train-per-domain 2 --val-per-domain 1 --save-every 5)
+elif [[ "$SCC_MODE" == resume ]]; then
+    # Match the saved crop/subset settings, including when resuming a smoke run.
+    mapfile -t saved < <(python -c 'import json,sys; c=json.load(open(sys.argv[1])); print(c["crop_size"]); print(c["batch_size"]); print(c["train_per_domain"]); print(c["val_per_domain"]); print(c["seed"]); print(c["training"]["baseline_updates"]); print(c["training"]["refiner_updates"])' "$SCC_RUN_DIR/config.json")
+    options+=(--resume --crop-size "${saved[0]}" --batch-size "${saved[1]}"
+        --train-per-domain "${saved[2]}" --val-per-domain "${saved[3]}" --seed "${saved[4]}"
+        --baseline-updates "${SCC_RESUME_BASELINE_UPDATES:-${saved[5]}}"
+        --refiner-updates "${SCC_RESUME_REFINER_UPDATES:-${saved[6]}}")
+fi
+python -m road_refinement train --stage both "${options[@]}"
+bundle="$SCC_RUN_DIR/bundle-${JOB_ID:-local}"
+python -m road_refinement export --run-dir "$SCC_RUN_DIR" --output "$bundle"
+sample="$(python -c 'from pathlib import Path; import os; print(sorted((Path(os.environ["DATA_ROOT"])/"Val/Urban/images_png").glob("*.png"))[0])')"
+python -m road_refinement predict --bundle "$bundle" --input "$sample" \
+    --output "$SCC_RUN_DIR/predictions-${JOB_ID:-local}" --steps 4 --device cuda --save-trace
+python -m road_refinement evaluate --bundle "$bundle" --data-root "$DATA_ROOT" \
+    --output "$SCC_RUN_DIR/evaluation-${JOB_ID:-local}.json" --device cuda --val-per-domain 2
+echo "Completed. Submission bundle: $bundle"
+
