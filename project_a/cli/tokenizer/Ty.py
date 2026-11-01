@@ -1,40 +1,31 @@
 import torch
 from torch import nn
 
-from Tx import Tx
+from Tx import pos2d
 
 
 class Ty(nn.Module):
 
-    def __init__(self, c_in, d=256, nhead=8, num_layers=2, dim_ff=None, dropout=0.1) -> None:
+    def __init__(self, d=256, patch=8) -> None:
         super().__init__()
-        assert d % nhead == 0
-        self.tx = Tx(c_in, d)
-        layer = nn.TransformerEncoderLayer(
-            d_model=d,
-            nhead=nhead,
-            dim_feedforward=dim_ff or 4 * d,
-            dropout=dropout,
-            activation="gelu",
-            batch_first=True,
-            norm_first=True,
-        )
-        self.encoder = nn.TransformerEncoder(layer, num_layers=num_layers, enable_nested_tensor=False)
+        assert d % 4 == 0
+        self.patch = patch
+        self.proj = nn.Conv2d(1, d, kernel_size=patch, stride=patch)
         self.norm = nn.LayerNorm(d)
 
-    def forward(self, f):
-        B, _, h, w = f.shape
-        x = self.tx(f)
-        x = self.encoder(x)
+    def forward(self, y):
+        x = self.proj(y)
+        B, d, h, w = x.shape
+        x = x.flatten(2).transpose(1, 2)
+        x = x + pos2d(h, w, d, x.device)
         x = self.norm(x)
-        return x.transpose(1, 2).reshape(B, -1, h, w)
+        return x
 
 
 if __name__ == "__main__":
-    model = Ty(c_in=64, d=256)
-    f = torch.randn(2, 64, 8, 10)
-    out = model(f)
-    print("input :", tuple(f.shape))
-    print("tokens:", tuple(model.tx(f).shape))
+    model = Ty(d=256, patch=8)
+    y = torch.randn(2, 1, 64, 80)
+    out = model(y)
+    print("input :", tuple(y.shape))
     print("output:", tuple(out.shape))
     print("params:", sum(p.numel() for p in model.parameters()))
