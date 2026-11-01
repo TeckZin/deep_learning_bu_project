@@ -16,6 +16,9 @@ export CUBLAS_WORKSPACE_CONFIG=:4096:8
 python -m road_refinement check --data-root "$DATA_ROOT" --encoder-weights "$ENCODER_WEIGHTS" --require-cuda
 options=(--data-root "$DATA_ROOT" --run-dir "$SCC_RUN_DIR" --encoder-weights "$ENCODER_WEIGHTS"
     --device cuda --baseline-updates "$SCC_BASELINE_UPDATES" --refiner-updates "$SCC_REFINER_UPDATES")
+if [[ "${SCC_NO_AMP:-1}" == 1 ]]; then
+    options+=(--no-amp)
+fi
 if [[ "$SCC_MODE" == smoke ]]; then
     options+=(--baseline-updates 10 --refiner-updates 10 --crop-size 128
         --train-per-domain 2 --val-per-domain 1 --save-every 5)

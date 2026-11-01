@@ -22,6 +22,31 @@ def append_log(path, value):
     print(value, flush=True)
 
 
+def optimizer_update(model, optimizer, scaler):
+    """Let GradScaler skip overflowed batches before attempting clipping.
+
+    A finite forward loss can still have overflowing float16 gradients. Raising
+    in clip_grad_norm_ would prevent GradScaler from lowering its loss scale.
+    Full-precision nonfinite gradients remain an error.
+    """
+    scaler.unscale_(optimizer)
+    parameters = [p for p in model.parameters() if p.grad is not None]
+    finite = torch.stack([p.grad.isfinite().all() for p in parameters]).all()
+    if not finite:
+        if not scaler.is_enabled():
+            raise RuntimeError("Nonfinite gradients in full-precision training")
+        # unscale_ recorded the overflow, so step skips the optimizer update
+        # and update reduces the scale. Never clip or apply these gradients.
+        scaler.step(optimizer)
+        scaler.update()
+        optimizer.zero_grad(set_to_none=True)
+        return None, True
+    norm = torch.nn.utils.clip_grad_norm_(parameters, 1.0, error_if_nonfinite=True)
+    scaler.step(optimizer)
+    scaler.update()
+    return float(norm), False
+
+
 def train(args, device):
     seed_all(args.seed)
     run = Path(args.run_dir).resolve()
@@ -114,6 +139,7 @@ def stage_train(args, device, run, stage, tiles, validation):
     amp = device.type == "cuda" and not args.no_amp
     scaler = torch.amp.GradScaler("cuda", enabled=amp)
     start, best, previous_seconds = 0, -1.0, 0.0
+    successful_updates = 0
     peak_training = 0 if device.type == "cuda" else None
     if args.resume and resume_path.exists():
         # Private optimizer/RNG state produced by this trainer, never exported.
@@ -124,6 +150,7 @@ def stage_train(args, device, run, stage, tiles, validation):
         optimizer.load_state_dict(state["optimizer"])
         scaler.load_state_dict(state["scaler"])
         start, best = state["step"], state["best"]
+        successful_updates = state.get("successful_updates", start)
         previous_seconds = state["seconds"]
         peak_training = state.get("peak_training_cuda_bytes", peak_training)
         torch.set_rng_state(state["torch_rng"].cpu())
@@ -169,19 +196,23 @@ def stage_train(args, device, run, stage, tiles, validation):
         if not torch.isfinite(loss):
             raise ValueError(f"Nonfinite training loss at {stage} update {step}")
         scaler.scale(loss).backward()
-        scaler.unscale_(optimizer)
-        norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0, error_if_nonfinite=True)
-        scaler.step(optimizer)
-        scaler.update()
+        norm, skipped = optimizer_update(model, optimizer, scaler)
+        successful_updates += int(not skipped)
         if device.type == "cuda":
             peak_training = max(peak_training or 0, torch.cuda.max_memory_allocated(device))
         seconds = previous_seconds + time.perf_counter() - began
-        if step == start + 1 or step % 10 == 0 or step == total:
+        if skipped or step == start + 1 or step % 10 == 0 or step == total:
             append_log(run / "metrics.jsonl", {
                 "stage": stage, "step": step, "loss": loss.item(), "steps": k,
-                "gradient_norm": float(norm), "seconds": seconds,
+                "gradient_norm": norm, "seconds": seconds, "amp_update_skipped": skipped,
+                "successful_updates": successful_updates,
+                "loss_scale": scaler.get_scale() if amp else None,
             })
         if step % args.save_every == 0 or step == total:
+            if successful_updates == 0:
+                if step == total:
+                    raise RuntimeError("All optimizer updates overflowed; rerun in a new directory with --no-amp")
+                continue
             report = evaluate_tiles(baseline, refiner, validation, device, 0 if stage == "baseline" else 4)
             quality = report["overall"]["road_iou"]
             save_weights(model, checkpoints / f"{stage}_latest.safetensors")
@@ -192,6 +223,7 @@ def stage_train(args, device, run, stage, tiles, validation):
             snapshot = {
                 "model": model.state_dict(), "optimizer": optimizer.state_dict(), "scaler": scaler.state_dict(),
                 "step": step, "best": best, "seconds": seconds, "source_sha256": source_hash(),
+                "successful_updates": successful_updates,
                 "peak_training_cuda_bytes": peak_training,
                 "torch_rng": torch.get_rng_state(),
                 "cuda_rng": torch.cuda.get_rng_state_all() if device.type == "cuda" else None,

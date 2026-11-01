@@ -122,8 +122,12 @@ by the refiner is saved in its run directory for export.
 
 Training uses AdamW, masked BCE, and gradient clipping. Baseline learning rate
 is 1e-3; refiner learning rate is 1e-4. Refiner K is sampled from 1, 2 and 4, with
-equal supervision weights across the selected unroll. CUDA mixed precision is
-enabled unless `--no-amp` is passed. The frozen encoder's BatchNorm statistics
+equal supervision weights across the selected unroll. SCC scripts default to
+full precision (`SCC_NO_AMP=1`) for the first working checkpoint. Set
+`SCC_NO_AMP=0` to opt into CUDA mixed precision; manual training enables it
+unless `--no-amp` is passed. Overflowed AMP updates are skipped and logged while
+the loss scale adjusts; full-precision nonfinite gradients still stop training.
+The frozen encoder's BatchNorm statistics
 remain fixed even while the decoder trains.
 
 Use `--train-per-domain 0 --val-per-domain 0` for all allowed Train/Val tiles.

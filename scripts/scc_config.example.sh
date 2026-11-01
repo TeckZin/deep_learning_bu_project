@@ -18,6 +18,8 @@ SCC_GPU_TYPE=""                       # Optional course-approved type from qgpus
 SCC_WALLTIME=04:00:00
 SCC_BASELINE_UPDATES=200
 SCC_REFINER_UPDATES=200
+# Default to full precision for the first working checkpoint. Set 0 to use AMP.
+SCC_NO_AMP=1
 # Empty means preserve the original targets when resuming. Set to extend a run.
 SCC_RESUME_BASELINE_UPDATES=""
 SCC_RESUME_REFINER_UPDATES=""
