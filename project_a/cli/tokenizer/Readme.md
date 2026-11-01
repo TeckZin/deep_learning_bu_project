@@ -1,35 +1,41 @@
 # `Tx` and `Ty`: tensor shapes, step by step
 
-`Tx` turns a CNN feature map into tokens with 2D positional encoding.
-`Ty` runs a transformer encoder (self-attention) over those tokens and turns them back into a feature map.
+Both are **tokenizers** for the looped refiner `Rθ`. They turn 2D grids into token sequences on the **same h×w grid**, so the shared transformer core can line them up:
+
+- `Tx(f)` turns the frozen encoder's features `f` into **image tokens** (computed from the same `f` every step).
+- `Ty(yt)` turns the current answer mask `yt` into **answer tokens** (changes every step as `yt` is refined).
 
 ```
-f (B, c_in, h, w) ──Tx──▶ tokens (B, N, d) ──transformer──▶ (B, N, d) ──reshape──▶ (B, d, h, w)
-                   └──────────────────────────── Ty ─────────────────────────────────┘
+f  (B, C, h, w) ──Tx──▶ image tokens  (B, N, d) ─┐
+yt (B, 1, H, W) ──Ty──▶ answer tokens (B, N, d) ─┼─ cat ─▶ (B, 2N + Nz, d) ─▶ shared transformer core
+zt (B, Nz, d)   ─────── memory tokens (B, Nz, d) ─┘
 ```
+
+Attention happens only in the core, not inside `Tx` or `Ty`.
 
 ## Notation
 
 | Symbol | Meaning | Example |
 |---|---|---|
 | `B` | batch size | 2 |
-| `c_in` | input channels (from the CNN) | 64 |
-| `h`, `w` | height and width of the feature map | 8, 10 |
-| `d` | token size (model dimension); divisible by 4 and by `nhead` | 256 |
-| `N = h * w` | number of tokens (one per grid position) | 80 |
-| `nhead` | attention heads | 8 |
-| `d_head = d / nhead` | size of each head | 32 |
-| `dim_ff` | feed-forward hidden size, default `4 * d` | 1024 |
-| `num_layers` | stacked encoder layers | 2 |
+| `C` (`c_in`) | encoder output channels | 64 |
+| `H`, `W` | full image / mask size | 64, 80 |
+| `h`, `w` | encoder feature-map size | 8, 10 |
+| `patch` | `H / h` = `W / w`, the encoder's downsampling factor | 8 |
+| `d` | token size; divisible by 4 (and by the core's `nhead`) | 256 |
+| `N = h * w` | tokens per grid (one per grid position) | 80 |
+| `Nz` | number of memory tokens | e.g. 32 |
+
+The rule that ties them together: **`patch` must equal `H / h`**, so that `Ty` produces the same `N` tokens on the same grid as `Tx`.
 
 ---
 
-## `Tx.forward(f)`
+## `Tx.forward(f)`: image tokens
 
 | Step | Code | Shape | Example |
 |---|---|---|---|
-| Input | `f` | `(B, c_in, h, w)` | `(2, 64, 8, 10)` |
-| 1. Project channels | `self.proj(f)` (1×1 conv, `c_in` → `d`) | `(B, d, h, w)` | `(2, 256, 8, 10)` |
+| Input | `f` | `(B, C, h, w)` | `(2, 64, 8, 10)` |
+| 1. Project channels | `self.proj(f)` (1×1 conv, `C` → `d`) | `(B, d, h, w)` | `(2, 256, 8, 10)` |
 | 2. Flatten the grid | `x.flatten(2)` | `(B, d, h*w)` | `(2, 256, 80)` |
 | 3. Tokens first | `.transpose(1, 2)` | `(B, N, d)` | `(2, 80, 256)` |
 | 4. Add positions | `x + pos2d(h, w, d)` | `(B, N, d)` | `(2, 80, 256)` |
@@ -42,9 +48,26 @@ f (B, c_in, h, w) ──Tx──▶ tokens (B, N, d) ──transformer──▶ 
 - **Step 4** broadcasts the `(N, d)` position codes over the batch: `(N, d)` → `(1, N, d)` → added to `(B, N, d)`.
 - **Step 5** normalizes each token's `d` numbers on its own.
 
+Since `f` is frozen and the same every step, `Tx(f)` can be computed once and reused for all K steps.
+
+## `Ty.forward(yt)`: answer tokens
+
+| Step | Code | Shape | Example |
+|---|---|---|---|
+| Input | `yt` | `(B, 1, H, W)` | `(2, 1, 64, 80)` |
+| 1. Patchify | `self.proj(y)` (conv, kernel = stride = `patch`, 1 → `d`) | `(B, d, H/patch, W/patch)` = `(B, d, h, w)` | `(2, 256, 8, 10)` |
+| 2. Flatten the grid | `x.flatten(2)` | `(B, d, h*w)` | `(2, 256, 80)` |
+| 3. Tokens first | `.transpose(1, 2)` | `(B, N, d)` | `(2, 80, 256)` |
+| 4. Add positions | `x + pos2d(h, w, d)` | `(B, N, d)` | `(2, 80, 256)` |
+| 5. Normalize | `self.norm(x)` | `(B, N, d)` | `(2, 80, 256)` |
+| Output | `return x` | `(B, N, d)` | `(2, 80, 256)` |
+
+- **Step 1** is the only difference from `Tx`. The full-resolution mask is cut into non-overlapping `patch × patch` squares, and each square (`patch²` pixels) becomes one `d`-number token. Output size by the conv formula: `(64 − 8)/8 + 1 = 8` and `(80 − 8)/8 + 1 = 10`.
+- **Steps 2–5** are identical to `Tx`, including the **same `pos2d` codes**, so image token `i` and answer token `i` describe the same location.
+
 ## `pos2d(h, w, d)`
 
-Gives every grid position `(row y, column x)` a unique `d`-number code.
+Gives every grid position `(row y, column x)` a unique `d`-number code. Shared by `Tx` and `Ty`.
 
 | Step | Code | Shape | Example |
 |---|---|---|---|
@@ -65,59 +88,34 @@ Frequencies: `ω_k = 1 / 10000^(k / (d/4))`, `k = 0 … d/4 − 1`, from fast-ch
 
 ---
 
-## `Ty.forward(f)`
+## Into the shared core
 
-| Step | Code | Shape | Example |
-|---|---|---|---|
-| Input | `f` | `(B, c_in, h, w)` | `(2, 64, 8, 10)` |
-| 1. Tokenize | `self.tx(f)` | `(B, N, d)` | `(2, 80, 256)` |
-| 2. Self-attention layers | `self.encoder(x)` | `(B, N, d)` | `(2, 80, 256)` |
-| 3. Final normalize | `self.norm(x)` | `(B, N, d)` | `(2, 80, 256)` |
-| 4. Channels first | `x.transpose(1, 2)` | `(B, d, N)` | `(2, 256, 80)` |
-| 5. Back to a grid | `.reshape(B, -1, h, w)` | `(B, d, h, w)` | `(2, 256, 8, 10)` |
-| Output | | `(B, d, h, w)` | `(2, 256, 8, 10)` |
+Each step, the core receives all three token sets joined along the token axis:
 
-`h` and `w` are read from `f` at the start because `Tx` flattens them away; step 5 undoes `Tx`'s steps 2–3.
+| Tokens | Shape | Example (`Nz` = 32) |
+|---|---|---|
+| `Tx(f)` image tokens | `(B, N, d)` | `(2, 80, 256)` |
+| `Ty(yt)` answer tokens | `(B, N, d)` | `(2, 80, 256)` |
+| `zt` memory tokens | `(B, Nz, d)` | `(2, 32, 256)` |
+| `cat(..., dim=1)` | `(B, 2N + Nz, d)` | `(2, 192, 256)` |
 
-### Inside one encoder layer (pre-norm)
-
-Every sub-step keeps the shape `(B, N, d)`; the residual additions require it.
-
-| Sub-step | Operation | Shape inside | Example |
-|---|---|---|---|
-| a. Norm | LayerNorm | `(B, N, d)` | `(2, 80, 256)` |
-| b. Q, K, V | three linear maps `d → d` | `(B, N, d)` each | `(2, 80, 256)` |
-| c. Split heads | reshape | `(B, nhead, N, d_head)` | `(2, 8, 80, 32)` |
-| d. Attention scores | `Q Kᵀ / √d_head` | `(B, nhead, N, N)` | `(2, 8, 80, 80)` |
-| e. Weighted sum | `softmax(scores) V` | `(B, nhead, N, d_head)` | `(2, 8, 80, 32)` |
-| f. Merge heads + output linear | reshape, `d → d` | `(B, N, d)` | `(2, 80, 256)` |
-| g. Residual | `x + attn` | `(B, N, d)` | `(2, 80, 256)` |
-| h. Norm | LayerNorm | `(B, N, d)` | `(2, 80, 256)` |
-| i. Feed-forward up | linear `d → dim_ff`, GELU | `(B, N, dim_ff)` | `(2, 80, 1024)` |
-| j. Feed-forward down | linear `dim_ff → d` | `(B, N, d)` | `(2, 80, 256)` |
-| k. Residual | `x + ff` | `(B, N, d)` | `(2, 80, 256)` |
-
-The `(N, N)` score matrix in step d is where every grid position looks at every other one. Its memory grows with `N² = (h·w)²`, so large feature maps get expensive.
+Attention cost grows with `(2N + Nz)²` and is paid K times per image. A 16×16 encoder grid gives 544 tokens (fine); a 64×64 grid gives over 8,000 (too many for full attention). Pool `f` and raise `patch` together if the grid is large.
 
 ---
 
-## Parameter count (`c_in` = 64, `d` = 256, `dim_ff` = 1024, 2 layers)
+## Parameter count (`C` = 64, `d` = 256, `patch` = 8)
 
 | Part | Formula | Count |
 |---|---|---|
-| `Tx.proj` (1×1 conv) | `c_in·d + d` | 16,640 |
+| `Tx.proj` (1×1 conv) | `C·d + d` | 16,640 |
 | `Tx.norm` | `2d` | 512 |
-| `pos2d` | fixed, not learned | 0 |
 | **`Tx` total** | | **17,152** |
-| Attention Q, K, V | `3(d·d + d)` | 197,376 |
-| Attention output | `d·d + d` | 65,792 |
-| Feed-forward up | `d·dim_ff + dim_ff` | 263,168 |
-| Feed-forward down | `dim_ff·d + d` | 262,400 |
-| Two LayerNorms | `2 · 2d` | 1,024 |
-| **One encoder layer** | | **789,760** |
-| Encoder (2 layers) | | 1,579,520 |
+| `Ty.proj` (patch conv) | `patch²·1·d + d` | 16,640 |
 | `Ty.norm` | `2d` | 512 |
-| **`Ty` total (includes `Tx`)** | | **1,597,184** |
+| **`Ty` total** | | **17,152** |
+| `pos2d` | fixed, not learned | 0 |
+
+(The two totals match only by coincidence: `C = 64` and `patch² = 64`.)
 
 ---
 
@@ -128,6 +126,8 @@ conda activate dl_env
 python Tx.py
 python Ty.py
 ```
+
+`Ty.py` imports `pos2d` from `Tx.py`, so keep both files in the same folder.
 
 Expected output of `Tx.py` (verified):
 
@@ -140,8 +140,7 @@ pos2d : (80, 256)
 Expected output of `Ty.py`:
 
 ```
-input : (2, 64, 8, 10)
-tokens: (2, 80, 256)
-output: (2, 256, 8, 10)
-params: 1597184
+input : (2, 1, 64, 80)
+output: (2, 80, 256)
+params: 17152
 ```
