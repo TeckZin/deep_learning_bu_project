@@ -6,7 +6,7 @@ and width as the input image.
 
 
 
-![workflwo](docs/workflow.svg)
+![Workflow](docs/workflow.svg)
 
 ## How it works
 
@@ -20,6 +20,19 @@ and width as the input image.
    - **Core** (one shared transformer, reused every round) updates the state to `z_(t+1)`.
    - **Head** decodes a full-resolution correction: `y_(t+1) = y_t + correction`.
 3. `predict.py` (staff runner) saves the mask after exactly K rounds.
+
+## Choosing K
+
+K is the number of refinement rounds. The model never sees K: `predict.py` decides
+it with `--steps`, and the same checkpoint works for any K from 0 to 8.
+
+- **K = 0** returns the baseline mask unchanged (no refinement).
+- **The official score uses K = 1, 2 and 4**, plus a stress test (corrupted
+  images) at K = 4. `score.py` combines these four runs with the leaderboard formula.
+- **We train with K = 4 and supervise every round** (the loss is averaged over
+  rounds 1 to 4), so the mask is useful after 1, 2 or 4 rounds, not only at the end.
+- K = 6 and 8 work too, but were not trained directly; they are reported only in
+  the iteration-curve experiment.
 
 ## Folder contents
 
@@ -60,9 +73,28 @@ python predict.py \
 
 - `--input`: folder of `.png` / `.jpg` / `.jpeg` images (subfolders are searched).
 - `--output`: must be a new or empty folder. We put K in the name (`results_k4`).
-- `--steps`: number of refinement rounds K (0 to 8). **Our final results use K = 4.**
+- `--steps`: number of refinement rounds K (0 to 8). Graded runs use K = 1, 2 and 4
+  (see below); use one output folder per K.
 - `--device`: `cuda` or `cpu`.
 - `--save-trace` (optional): also saves the mask after every round.
+
+To produce all graded K values, run once per K, each into its own folder:
+
+```bash
+for K in 1 2 4; do
+  python predict.py \
+    --checkpoint weights/refiner.safetensors \
+    --baseline   weights/baseline.safetensors \
+    --input      path/to/images \
+    --output     results_k$K \
+    --steps      $K \
+    --device     cuda
+done
+```
+
+Or run K = 4 once with `--save-trace`: `trace/k1`, `trace/k2` and `trace/k4` then hold
+the masks after rounds 1, 2 and 4 (the runner never passes K to the model, so a
+round-2 mask from a K = 4 run equals the final mask of a K = 2 run).
 
 ## Output
 
@@ -80,6 +112,26 @@ With `--save-trace`, `trace/k<i>/` is the result after round i.
 
 **Mask values:** `masks/*.png` are written by the staff runner as 0 (non-road)
 and 255 (road). To get 0/1, divide by 255, or threshold `probabilities/*.npy` at 0.5.
+
+## Scoring (development data)
+
+`evaluate.py` scores one run (one condition, one K) against a manifest;
+`score.py` combines the four graded runs:
+
+```bash
+python evaluate.py --manifest <manifest.json> --predictions results_k1 --output reports/ordinary_1.json
+python evaluate.py --manifest <manifest.json> --predictions results_k2 --output reports/ordinary_2.json
+python evaluate.py --manifest <manifest.json> --predictions results_k4 --output reports/ordinary_4.json
+
+python make_stress.py --manifest <manifest.json> --output stress --seed 0
+# run predict.py --steps 4 on the stress images, evaluate with the stress manifest -> reports/stress_4.json
+
+python score.py --ordinary-1 reports/ordinary_1.json --ordinary-2 reports/ordinary_2.json \
+  --ordinary-4 reports/ordinary_4.json --stress-4 reports/stress_4.json --output reports/score.json
+```
+
+Official manifests come from course staff. For local checks, `make_manifest.py`
+builds one from the Val split.
 
 ## Hardware
 
