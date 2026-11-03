@@ -4,6 +4,10 @@ Inference code for our Project A submission. Given a folder of RGB images, it
 predicts a road mask for each one (1 = road, 0 = non-road) at the same height
 and width as the input image.
 
+
+
+![workflwo](docs/workflow.svg)
+
 ## How it works
 
 1. **Baseline (frozen, staff-provided)**: produces image features and an initial

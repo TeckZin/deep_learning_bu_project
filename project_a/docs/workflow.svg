@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="680" height="460" viewBox="0 0 680 460" font-family="Helvetica, Arial, sans-serif">
+<title>Project A file workflow</title>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="#73726c" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+<rect width="680" height="460" fill="#ffffff"/>
+<g text-anchor="middle" dominant-baseline="central">
+<rect x="40" y="40" width="180" height="56" rx="8" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.75"/>
+<text x="130" y="58" font-size="14" font-weight="500" fill="#085041">dataset.py</text>
+<text x="130" y="78" font-size="12" fill="#0F6E56">Images + masks, road=3</text>
+<rect x="40" y="140" width="180" height="56" rx="8" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.75"/>
+<text x="130" y="158" font-size="14" font-weight="500" fill="#085041">train.py</text>
+<text x="130" y="178" font-size="12" fill="#0F6E56">Unrolls K steps + loss</text>
+<rect x="40" y="240" width="180" height="56" rx="8" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.75"/>
+<text x="130" y="258" font-size="14" font-weight="500" fill="#085041">refiner.safetensors</text>
+<text x="130" y="278" font-size="12" fill="#0F6E56">Trained weights</text>
+<rect x="250" y="90" width="180" height="56" rx="8" fill="#F1EFE8" stroke="#5F5E5A" stroke-width="0.75"/>
+<text x="340" y="108" font-size="14" font-weight="500" fill="#444441">baseline.py</text>
+<text x="340" y="128" font-size="12" fill="#5F5E5A">Frozen: features + y0</text>
+<rect x="250" y="190" width="180" height="56" rx="8" fill="#F1EFE8" stroke="#5F5E5A" stroke-width="0.75"/>
+<text x="340" y="208" font-size="14" font-weight="500" fill="#444441">submission/model.py</text>
+<text x="340" y="228" font-size="12" fill="#5F5E5A">initialize + step x K</text>
+<rect x="460" y="40" width="180" height="56" rx="8" fill="#FAECE7" stroke="#993C1D" stroke-width="0.75"/>
+<text x="550" y="58" font-size="14" font-weight="500" fill="#712B13">Test images</text>
+<text x="550" y="78" font-size="12" fill="#993C1D">PNG or JPG folder</text>
+<rect x="460" y="140" width="180" height="56" rx="8" fill="#FAECE7" stroke="#993C1D" stroke-width="0.75"/>
+<text x="550" y="158" font-size="14" font-weight="500" fill="#712B13">predict.py</text>
+<text x="550" y="178" font-size="12" fill="#993C1D">Staff runner</text>
+<rect x="460" y="240" width="180" height="56" rx="8" fill="#FAECE7" stroke="#993C1D" stroke-width="0.75"/>
+<text x="550" y="258" font-size="14" font-weight="500" fill="#712B13">results_kK/</text>
+<text x="550" y="278" font-size="12" fill="#993C1D">masks, probs, run.json</text>
+<rect x="460" y="340" width="180" height="56" rx="8" fill="#FAECE7" stroke="#993C1D" stroke-width="0.75"/>
+<text x="550" y="358" font-size="14" font-weight="500" fill="#712B13">score.py</text>
+<text x="550" y="378" font-size="12" fill="#993C1D">Metrics, pick best K</text>
+</g>
+<g stroke="#73726c" stroke-width="1.5" fill="none" marker-end="url(#arrow)">
+<line x1="130" y1="96" x2="130" y2="138"/>
+<line x1="130" y1="196" x2="130" y2="238"/>
+<line x1="220" y1="155" x2="248" y2="128"/>
+<line x1="220" y1="182" x2="248" y2="210"/>
+<line x1="460" y1="155" x2="432" y2="128"/>
+<line x1="460" y1="182" x2="432" y2="210"/>
+<line x1="220" y1="268" x2="296" y2="249"/>
+<line x1="550" y1="96" x2="550" y2="138"/>
+<line x1="550" y1="196" x2="550" y2="238"/>
+<line x1="550" y1="296" x2="550" y2="338"/>
+</g>
+<g font-size="12" fill="#5F5E5A" dominant-baseline="central">
+<rect x="40" y="420" width="12" height="12" rx="2" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.75"/><text x="60" y="426">Training</text>
+<rect x="150" y="420" width="12" height="12" rx="2" fill="#FAECE7" stroke="#993C1D" stroke-width="0.75"/><text x="170" y="426">Inference</text>
+<rect x="270" y="420" width="12" height="12" rx="2" fill="#F1EFE8" stroke="#5F5E5A" stroke-width="0.75"/><text x="290" y="426">Used by both</text>
+</g>
+</svg>
