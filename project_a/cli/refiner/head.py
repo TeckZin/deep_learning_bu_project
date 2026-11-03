@@ -18,9 +18,10 @@ class Head(nn.Module):
         self.patch = patch
         self.norm = nn.LayerNorm(d)
         self.proj = nn.Linear(d, patch * patch)  # one logit per pixel in the block
-        # Zero init: dy = 0 before training, so step() starts by returning y_t
-        # unchanged and the refiner begins exactly at the baseline.
-        nn.init.zeros_(self.proj.weight)
+        # Small (not zero) init: the untrained refiner stays close to the baseline,
+        # but every step still changes the mask. A zero init makes dy = 0, which
+        # fails test_updates_change_prediction and test_feedback_interventions_change_demo.
+        nn.init.normal_(self.proj.weight, std=0.01)
         nn.init.zeros_(self.proj.bias)
 
     def forward(self, tokens, h, w, out_size=None):
