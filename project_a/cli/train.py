@@ -121,6 +121,7 @@
 # if __name__ == "__main__":
 #     main()
 
+
 import argparse
 from pathlib import Path
 import random
@@ -203,8 +204,15 @@ def take_subset(dataset, fraction=1.0, max_images=None, seed=0):
 
 
 def save_checkpoint(model, path):
+    # Writes the same weights twice:
+    #   <name>.safetensors  what predict.py loads (safe, no pickle)
+    #   <name>.ckpt         torch.save state dict, load with torch.load(path, weights_only=True)
+    path = path.with_suffix(".safetensors")
     path.parent.mkdir(parents=True, exist_ok=True)
-    save_file({k: v.detach().contiguous().cpu() for k, v in model.state_dict().items()}, str(path))
+    state = {k: v.detach().contiguous().cpu() for k, v in model.state_dict().items()}
+    save_file(state, str(path))
+    torch.save(state, str(path.with_suffix(".ckpt")))
+    return path, path.with_suffix(".ckpt")
 
 
 def main(argv=None):
@@ -218,7 +226,8 @@ def main(argv=None):
                    help="Train on at most this many random images (applied after --fraction)")
     p.add_argument("--demo-baseline", action="store_true",
                    help="Real data + UNTRAINED demo baseline, for pipeline tests until staff release the baseline")
-    p.add_argument("--output", type=Path, default=Path("refiner.safetensors"))
+    p.add_argument("--output", type=Path, default=Path("weights/refiner.safetensors"),
+                   help="Checkpoint path; a .ckpt copy is written next to it")
     p.add_argument("--steps", type=int, default=4, choices=range(1, 9), metavar="K")
     p.add_argument("--epochs", type=int, default=10)
     p.add_argument("--lr", type=float, default=1e-4)
@@ -275,9 +284,9 @@ def main(argv=None):
             opt.step()
             total += loss.item()
         print(f"epoch {epoch + 1}/{args.epochs}: loss {total / max(len(loader), 1):.4f}")
-        save_checkpoint(model, args.output)
+        st_path, ckpt_path = save_checkpoint(model, args.output)
 
-    print(f"Saved {args.output}" + (" (DEMO ONLY: random data)" if args.demo else ""))
+    print(f"Saved {st_path} and {ckpt_path}" + (" (DEMO ONLY: random data)" if args.demo else ""))
 
 
 if __name__ == "__main__":
