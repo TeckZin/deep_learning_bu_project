@@ -1,10 +1,13 @@
+"""LoveDA road dataset + the public stress recipe as a training augmentation."""
 from pathlib import Path
+import random
 
 import numpy as np
 import torch
 from PIL import Image
-from torch.nn import functional as F
 from torch.utils.data import Dataset
+
+from make_stress import corrupt   # the staff's public corruption recipe (same ranges as the stress set)
 
 ROAD = 3
 IGNORE = 0
@@ -19,7 +22,7 @@ def load_image(path):
 
 
 def load_mask(path):
-    # LoveDA labels: 0 = no-data, 1..7 = classes, 3 = road. No clipping.
+    # Raw course labels: 0 = no-data (ignored), 3 = road, 1,2,4,5,6,7 = non-road.
     with Image.open(path) as im:
         raw = torch.from_numpy(np.asarray(im, dtype=np.int64).copy())
     target = (raw == ROAD).float()[None]
@@ -27,8 +30,35 @@ def load_mask(path):
     return target, valid
 
 
+class StressAugment:
+    """With probability p, apply one shadow / occlusion / blur corruption to the image.
+
+    Uses make_stress.corrupt, so the corruptions match the leaderboard's stress set
+    (20% of the score). Labels are untouched, exactly like the real stress set.
+    Training images only; never apply this to validation or evaluation data.
+    """
+    KINDS = ("shadow", "occlusion", "blur")
+
+    def __init__(self, p=0.3):
+        self.p = p
+
+    def __call__(self, image, target, valid):
+        if random.random() >= self.p:
+            return image, target, valid
+        rng = np.random.default_rng(random.getrandbits(63))
+        kind = self.KINDS[int(rng.integers(len(self.KINDS)))]
+        pil = Image.fromarray(np.rint(image.permute(1, 2, 0).numpy() * 255).astype(np.uint8))
+        out, _ = corrupt(pil, kind, rng)
+        image = torch.from_numpy(np.asarray(out, dtype=np.float32) / 255.0).permute(2, 0, 1).contiguous()
+        return image, target, valid
+
+
 class RoadDataset(Dataset):
-    """Pairs images and masks by file name; returns (image, target, valid, id)."""
+    """Pairs images and masks by file name; returns (image, target, valid, id) as full tiles.
+
+    Cropping happens in train.py AFTER the frozen baseline has run on the full tile,
+    so the refiner trains on exactly the features it will see at inference.
+    """
 
     def __init__(self, image_dir, mask_dir, ids=None, transform=None):
         self.image_dir = Path(image_dir)
@@ -57,13 +87,5 @@ class RoadDataset(Dataset):
         if image.shape[-2:] != target.shape[-2:]:
             raise ValueError(f"{image_id}: image {tuple(image.shape)} vs mask {tuple(target.shape)}")
         if self.transform is not None:
-            # A transform must apply the same geometric change to all three tensors.
             image, target, valid = self.transform(image, target, valid)
         return image, target, valid, image_id
-
-
-def masked_bce(logits, target, valid):
-    # Binary cross-entropy over valid pixels only (no-data pixels are excluded).
-    loss = F.binary_cross_entropy_with_logits(logits, target, reduction="none")
-    valid = valid.float()
-    return (loss * valid).sum() / valid.sum().clamp_min(1.0)
