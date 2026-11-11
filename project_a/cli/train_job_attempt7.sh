@@ -5,6 +5,7 @@
 #   - uncertainty channel 4p(1-p) in the answer tokens
 #   - head: core-output context channels (16) into the full-res stack + gated update
 #   - soft-clDice loss (--cldice-weight 0.5)
+#   - --detach-y: no gradient through the fed-back answer (each step learns to improve its input)
 # Reuses weights/h0_attempt6_best.safetensors (no need to retrain H0).
 # Submit from the cli folder:  mkdir -p logs && qsub train_job_attempt7.sh
 # Re-submitting continues run "$RUN" from its last finished epoch.
@@ -43,7 +44,7 @@ python train.py \
   --standin-baseline "$H0" --part b \
   --epochs 40 --steps 4 --batch-size 8 --crop 512 \
   --lr 3e-4 --warmup 500 --pos-weight 1 --edge-weight 4 --stress-aug 0.3 --y0-aug 0.5 \
-  --cldice-weight 0.5 \
+  --cldice-weight 0.5 --detach-y \
   --val-manifest val_small/manifest.json \
   --val-stress-manifest val_small_stress/manifest.json \
   --workers $WORKERS --output "$OUT" $RESUME

@@ -112,13 +112,18 @@ def seg_loss(logits, target, valid, pos_weight=1.0, dice_weight=1.0, edge_weight
     return loss
 
 
-def unroll(model, features, initial_logits, steps):
-    """Same loop as predict.py: initialize once, then call step() K times."""
+def unroll(model, features, initial_logits, steps, detach_y=False):
+    """Same loop as predict.py: initialize once, then call step() K times.
+
+    detach_y=True (RAFT-style): the fed-back answer y_t is treated as a constant input,
+    so each step is trained to improve whatever answer it is handed instead of step 1
+    being pushed to do everything. Gradients still flow between steps through the memory z.
+    """
     state = model.initialize(features, initial_logits)
     current = initial_logits
     outputs = []
     for _ in range(steps):
-        state, current = model.step(features, state, current)
+        state, current = model.step(features, state, current.detach() if detach_y else current)
         outputs.append(current)
     return outputs
 
@@ -356,6 +361,8 @@ def main(argv=None):
                    help="Fixed 50/50 split of Train: H0 on 'a', refiner on 'b'")
     p.add_argument("--y0-aug", type=float, default=0.0,
                    help="Probability per tile of degrading y0 (refiner input only), e.g. 0.5")
+    p.add_argument("--detach-y", action="store_true",
+                   help="Do not backpropagate through the fed-back answer y_t (RAFT-style)")
     p.add_argument("--output", type=Path, default=Path("weights/refiner.safetensors"))
     p.add_argument("--resume", type=Path, help="<name>.resume.pt written by a previous run")
     p.add_argument("--steps", type=int, default=4, choices=range(1, 9), metavar="K",
@@ -480,6 +487,7 @@ def main(argv=None):
             torch.cuda.reset_peak_memory_stats()
         total = 0.0
         base_total = 0.0                                   # loss of y0 itself ("do nothing")
+        in_total = 0.0                                     # loss of the (maybe degraded) refiner input
         step_totals = [0.0] * args.steps                   # loss of y1 .. yK
         for batch in loader:
             image, target, valid = (t.to(device, non_blocking=True) for t in batch[:3])
@@ -491,7 +499,7 @@ def main(argv=None):
             model.pos_offset = offsets                                        # true crop position
             refiner_in = degrade_logits(initial_logits, args.y0_aug, model.patch)
             with torch.autocast(device.type, dtype=torch.bfloat16, enabled=use_amp):
-                outputs = unroll(model, features, refiner_in, args.steps)
+                outputs = unroll(model, features, refiner_in, args.steps, args.detach_y)
             step_losses = [seg_loss(y, target, valid, args.pos_weight, args.dice_weight, args.edge_weight,
                                     args.cldice_weight)
                            for y in outputs]
@@ -506,6 +514,8 @@ def main(argv=None):
             with torch.no_grad():
                 base_total += seg_loss(initial_logits, target, valid, args.pos_weight,
                                        args.dice_weight, args.edge_weight, args.cldice_weight).item()
+                in_total += seg_loss(refiner_in, target, valid, args.pos_weight,
+                                     args.dice_weight, args.edge_weight, args.cldice_weight).item()
             for i, l in enumerate(step_losses):
                 step_totals[i] += l.item()
         n = max(len(loader), 1)
@@ -513,7 +523,7 @@ def main(argv=None):
                 if device.type == "cuda" else "")
         print(f"epoch {epoch + 1}/{args.epochs}: loss {total / n:.4f}, "
               f"lr {sched.get_last_lr()[0]:.2e}{peak}", flush=True)
-        print("  train loss by step:  y0 " + f"{base_total / n:.4f}"
+        print("  train loss by step:  y0 " + f"{base_total / n:.4f} (input {in_total / n:.4f})"
               + "".join(f" | y{i + 1} {s / n:.4f}" for i, s in enumerate(step_totals)), flush=True)
         latest = save_weights(model, args.output)
 
