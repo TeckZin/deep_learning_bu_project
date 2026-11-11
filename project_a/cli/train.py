@@ -48,13 +48,32 @@ CORE_LIMIT, TOTAL_LIMIT = 5_000_000, 10_000_000      # proposed caps from the ha
 
 # ---------------------------------------------------------------- loss / loop
 
-def seg_loss(logits, target, valid, pos_weight=1.0, dice_weight=1.0):
-    """BCE + soft Dice over valid pixels only (no-data pixels excluded). Computed in fp32."""
+def edge_band(target, radius=3):
+    """1 on pixels within `radius` px of a road edge (both sides), else 0.
+
+    Matches the Boundary IoU band: the metric erodes with a 3x3 square 3 times,
+    i.e. a 7x7 square, so radius=3 covers the same pixels.
+    """
+    k = 2 * radius + 1
+    dilated = F.max_pool2d(target, k, stride=1, padding=radius)
+    eroded = -F.max_pool2d(-target, k, stride=1, padding=radius)
+    return (dilated - eroded).clamp(0, 1)
+
+
+def seg_loss(logits, target, valid, pos_weight=1.0, dice_weight=1.0, edge_weight=1.0):
+    """BCE + soft Dice over valid pixels only (no-data pixels excluded). Computed in fp32.
+
+    edge_weight > 1 multiplies the BCE of pixels near road edges (the Boundary IoU band),
+    so the model is paid to put edges in the right place. 1.0 = plain BCE.
+    """
     logits = logits.float()
     valid = valid.float()
     pw = torch.tensor(pos_weight, device=logits.device)
     bce = F.binary_cross_entropy_with_logits(logits, target, reduction="none", pos_weight=pw)
-    bce = (bce * valid).sum() / valid.sum().clamp_min(1.0)
+    weight = valid
+    if edge_weight != 1.0:
+        weight = valid * (1 + (edge_weight - 1) * edge_band(target))
+    bce = (bce * weight).sum() / weight.sum().clamp_min(1.0)
     p = logits.sigmoid() * valid
     t = target * valid
     dice = 1 - (2 * (p * t).sum() + 1) / (p.sum() + t.sum() + 1)
@@ -260,6 +279,8 @@ def main(argv=None):
     p.add_argument("--pos-weight", type=float, default=1.0,
                    help="BCE weight on road pixels. Keep 1 with Dice; >1 over-predicts road at threshold 0.5")
     p.add_argument("--dice-weight", type=float, default=1.0)
+    p.add_argument("--edge-weight", type=float, default=1.0,
+                   help="BCE multiplier on pixels within 3 px of a road edge (1 = off), e.g. 4")
     p.add_argument("--stress-aug", type=float, default=0.3,
                    help="Probability of a shadow/occlusion/blur corruption per training tile (0 = off)")
     p.add_argument("--val-manifest", type=Path, help="Ordinary validation manifest (make_manifest.py)")
@@ -365,6 +386,8 @@ def main(argv=None):
         if device.type == "cuda":
             torch.cuda.reset_peak_memory_stats()
         total = 0.0
+        base_total = 0.0                                   # loss of y0 itself ("do nothing")
+        step_totals = [0.0] * args.steps                   # loss of y1 .. yK
         for batch in loader:
             image, target, valid = (t.to(device, non_blocking=True) for t in batch[:3])
             image, target, valid = augment_tiles(image, target, valid)
@@ -375,8 +398,9 @@ def main(argv=None):
             model.pos_offset = offsets                                        # true crop position
             with torch.autocast(device.type, dtype=torch.bfloat16, enabled=use_amp):
                 outputs = unroll(model, features, initial_logits, args.steps)
-            loss = sum(w * seg_loss(y, target, valid, args.pos_weight, args.dice_weight)
-                       for w, y in zip(weights, outputs))
+            step_losses = [seg_loss(y, target, valid, args.pos_weight, args.dice_weight, args.edge_weight)
+                           for y in outputs]
+            loss = sum(w * l for w, l in zip(weights, step_losses))
             opt.zero_grad(set_to_none=True)
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -384,10 +408,18 @@ def main(argv=None):
             sched.step()
             model.pos_offset = None
             total += loss.item()
+            with torch.no_grad():
+                base_total += seg_loss(initial_logits, target, valid, args.pos_weight,
+                                       args.dice_weight, args.edge_weight).item()
+            for i, l in enumerate(step_losses):
+                step_totals[i] += l.item()
+        n = max(len(loader), 1)
         peak = (f", peak mem {torch.cuda.max_memory_allocated() / 2**30:.1f} GiB"
                 if device.type == "cuda" else "")
-        print(f"epoch {epoch + 1}/{args.epochs}: loss {total / max(len(loader), 1):.4f}, "
+        print(f"epoch {epoch + 1}/{args.epochs}: loss {total / n:.4f}, "
               f"lr {sched.get_last_lr()[0]:.2e}{peak}", flush=True)
+        print("  train loss by step:  y0 " + f"{base_total / n:.4f}"
+              + "".join(f" | y{i + 1} {s / n:.4f}" for i, s in enumerate(step_totals)), flush=True)
         latest = save_weights(model, args.output)
 
         if val_rows:

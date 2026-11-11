@@ -91,13 +91,17 @@ class Head(nn.Module):
     """grid tokens [B, h*w, d] -> correction dy [B, 1, H, W].
 
     1. Each token -> a patch x patch block of logits (pixel_shuffle): coarse dy.
-    2. A small conv stack on [coarse dy, current probability] sharpens edges and
+    2. A dilated conv stack on [coarse dy, current probability] sharpens edges and
        thin roads at full resolution. It never sees the image, only the core's
        correction and the current answer (state-conditioned detail recovery,
        which the handout allows), so it is not a segmentation bypass.
+
+    attempt4: the refine stack is wider (64 channels) and dilated (1, 2, 4, 8, 1), so
+    each output pixel sees ~31 px of context instead of ~7 px. That is enough to
+    straighten an edge that a 1/16-resolution baseline blurred over 16-px blocks.
     """
 
-    def __init__(self, d=256, patch=16, hidden=32) -> None:
+    def __init__(self, d=256, patch=16, hidden=64, dilations=(1, 2, 4, 8, 1)) -> None:
         super().__init__()
         self.patch = patch
         self.norm = nn.LayerNorm(d)
@@ -106,10 +110,12 @@ class Head(nn.Module):
         # changes the mask (the staff tests check that updates change the prediction).
         nn.init.normal_(self.proj.weight, std=0.01)
         nn.init.zeros_(self.proj.bias)
-        self.refine = nn.Sequential(
-            nn.Conv2d(2, hidden, 3, padding=1), nn.GELU(),
-            nn.Conv2d(hidden, hidden, 3, padding=1), nn.GELU(),
-            nn.Conv2d(hidden, 1, 3, padding=1))
+        layers, c = [], 2
+        for dil in dilations:
+            layers += [nn.Conv2d(c, hidden, 3, padding=dil, dilation=dil), nn.GELU()]
+            c = hidden
+        layers.append(nn.Conv2d(hidden, 1, 3, padding=1))
+        self.refine = nn.Sequential(*layers)
         # Last conv starts at zero, so at initialization dy is just the coarse correction.
         nn.init.zeros_(self.refine[-1].weight)
         nn.init.zeros_(self.refine[-1].bias)
