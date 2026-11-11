@@ -68,6 +68,8 @@ def main(argv=None):
     p.add_argument("--dice-weight", type=float, default=1.0)
     p.add_argument("--fraction", type=float, default=1.0)
     p.add_argument("--max-images", type=int)
+    p.add_argument("--part", choices=["all", "a", "b"], default="all",
+                   help="Fixed 50/50 split of Train: use 'a' here and 'b' for train.py")
     p.add_argument("--workers", type=int, default=6)
     p.add_argument("--output", type=Path, default=Path("weights/h0_dino.safetensors"))
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
@@ -88,7 +90,8 @@ def main(argv=None):
     print(f"DINO {args.dino} (frozen, {encoder.channels} channels); "
           f"H0 params {sum(q.numel() for q in head.parameters()):,}")
 
-    dataset = take_subset(loveda_dataset(args.data_root), args.fraction, args.max_images, args.seed)
+    dataset = take_subset(loveda_dataset(args.data_root), args.fraction, args.max_images, args.seed,
+                          args.part)
     print(f"{len(dataset)} training images")
     loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.workers,
                         pin_memory=device.type == "cuda", drop_last=len(dataset) > args.batch_size,

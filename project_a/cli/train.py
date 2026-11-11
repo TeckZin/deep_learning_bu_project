@@ -150,6 +150,45 @@ def random_crops(features, logits, target, valid, crop, patch):
             torch.tensor(offsets, device=logits.device))
 
 
+def degrade_logits(logits, prob, patch=16):
+    """Randomly make y0 worse for the refiner's INPUT only (labels unchanged).
+
+    Per tile, with probability `prob`, one of:
+      coarse  - average-pool to 2x or 4x the patch size, upsample back (blurrier edges)
+      holes   - 10-25% of patch cells pushed to 'unsure' (logit * 0.1), so road
+                pieces go missing and the refiner must reconnect them
+      flips   - 3-10% of patch cells get their logit sign flipped (false road / missed road)
+      temp    - logit scale times U(0.3, 1.5) (over/under-confident baseline)
+    The refiner is then trained to correct errors larger than the ones a training-set
+    y0 makes. Features are left untouched, so the image evidence is still there.
+    """
+    if prob <= 0:
+        return logits
+    B, _, H, W = logits.shape
+    out = logits.clone()
+    h, w = max(1, H // patch), max(1, W // patch)
+    for i in range(B):
+        if random.random() >= prob:
+            continue
+        y = out[i:i + 1]
+        kind = random.randrange(4)
+        if kind == 0:
+            k = patch * random.choice((2, 4))
+            if H >= k and W >= k:
+                y = F.interpolate(F.avg_pool2d(y, k, stride=k, ceil_mode=True), size=(H, W),
+                                  mode="bilinear", align_corners=False)
+        elif kind in (1, 2):
+            frac = random.uniform(0.10, 0.25) if kind == 1 else random.uniform(0.03, 0.10)
+            cells = (torch.rand(1, 1, h, w, device=y.device) < frac).float()
+            cells = F.interpolate(cells, size=(H, W), mode="nearest")
+            factor = 0.1 if kind == 1 else -1.0
+            y = y * (1 - cells) + factor * y * cells
+        else:
+            y = y * random.uniform(0.3, 1.5)
+        out[i:i + 1] = y
+    return out
+
+
 # ---------------------------------------------------------------- data
 
 def demo_dataset():
@@ -172,8 +211,24 @@ def loveda_dataset(root, transform=None):
     return ConcatDataset(parts)
 
 
-def take_subset(dataset, fraction=1.0, max_images=None, seed=0):
+def split_part(dataset, part="all", seed=1234):
+    """Fixed 50/50 split of the training images: part 'a' or 'b' ('all' = no split).
+
+    Use 'a' for train_h0.py and 'b' for train.py, so the refiner trains on images
+    H0 has never seen and its y0 has realistic (validation-like) errors to correct.
+    The split seed is fixed and independent of --seed so both scripts agree.
+    """
+    if part == "all":
+        return dataset
+    generator = torch.Generator().manual_seed(seed)
+    perm = torch.randperm(len(dataset), generator=generator).tolist()
+    half = len(perm) // 2
+    return Subset(dataset, perm[:half] if part == "a" else perm[half:])
+
+
+def take_subset(dataset, fraction=1.0, max_images=None, seed=0, part="all"):
     """Random subset, fixed by the seed so the same images are picked every run."""
+    dataset = split_part(dataset, part)
     if not 0 < fraction <= 1:
         raise ValueError("--fraction must be in (0, 1]")
     n = max(1, round(len(dataset) * fraction))
@@ -265,6 +320,10 @@ def main(argv=None):
     p.add_argument("--demo", action="store_true", help="Random data + demo baseline; checks the code only")
     p.add_argument("--fraction", type=float, default=1.0, help="Random fraction of training images")
     p.add_argument("--max-images", type=int, help="At most this many training images")
+    p.add_argument("--part", choices=["all", "a", "b"], default="all",
+                   help="Fixed 50/50 split of Train: H0 on 'a', refiner on 'b'")
+    p.add_argument("--y0-aug", type=float, default=0.0,
+                   help="Probability per tile of degrading y0 (refiner input only), e.g. 0.5")
     p.add_argument("--output", type=Path, default=Path("weights/refiner.safetensors"))
     p.add_argument("--resume", type=Path, help="<name>.resume.pt written by a previous run")
     p.add_argument("--steps", type=int, default=4, choices=range(1, 9), metavar="K",
@@ -325,7 +384,7 @@ def main(argv=None):
             p.error(f"Refusing to train on a validation folder: {args.data_root}")
         transform = StressAugment(args.stress_aug) if args.stress_aug > 0 else None
         dataset, workers = loveda_dataset(args.data_root, transform), args.workers
-    dataset = take_subset(dataset, args.fraction, args.max_images, args.seed)
+    dataset = take_subset(dataset, args.fraction, args.max_images, args.seed, args.part)
     print(f"{len(dataset)} training images")
     loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, num_workers=workers,
                         pin_memory=device.type == "cuda", drop_last=len(dataset) > args.batch_size,
@@ -396,8 +455,9 @@ def main(argv=None):
             features, initial_logits, target, valid, offsets = random_crops(
                 features, initial_logits, target, valid, args.crop, model.patch)
             model.pos_offset = offsets                                        # true crop position
+            refiner_in = degrade_logits(initial_logits, args.y0_aug, model.patch)
             with torch.autocast(device.type, dtype=torch.bfloat16, enabled=use_amp):
-                outputs = unroll(model, features, initial_logits, args.steps)
+                outputs = unroll(model, features, refiner_in, args.steps)
             step_losses = [seg_loss(y, target, valid, args.pos_weight, args.dice_weight, args.edge_weight)
                            for y in outputs]
             loss = sum(w * l for w, l in zip(weights, step_losses))
