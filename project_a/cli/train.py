@@ -384,6 +384,8 @@ def main(argv=None):
     p.add_argument("--stress-aug", type=float, default=0.3,
                    help="Probability of a shadow/occlusion/blur corruption per training tile (0 = off)")
     p.add_argument("--val-manifest", type=Path, help="Ordinary validation manifest (make_manifest.py)")
+    p.add_argument("--val-every", type=int, default=1,
+                   help="Validate every N epochs (always after the last). 0 = only before and after training")
     p.add_argument("--val-stress-manifest", type=Path,
                    help="Stress version of it (make_stress.py); enables the full leaderboard score")
     p.add_argument("--workers", type=int, default=6)
@@ -527,7 +529,8 @@ def main(argv=None):
               + "".join(f" | y{i + 1} {s / n:.4f}" for i, s in enumerate(step_totals)), flush=True)
         latest = save_weights(model, args.output)
 
-        if val_rows:
+        last = epoch + 1 == args.epochs
+        if val_rows and (last or (args.val_every > 0 and (epoch + 1) % args.val_every == 0)):
             results = validate(model, base, val_rows, device)
             stress = validate(model, base, stress_rows, device, ks=(4,)) if stress_rows else None
             print_val(results, f"epoch {epoch + 1}", stress)
