@@ -241,6 +241,8 @@ def main(argv=None):
     p.add_argument("--data-root", type=Path, help="LoveDA training split, e.g. .../dataset/Train")
     p.add_argument("--baseline", type=Path, help="Frozen staff baseline checkpoint")
     p.add_argument("--demo-baseline", action="store_true", help="Real data + staff DemoBaseline")
+    p.add_argument("--standin-baseline", type=Path,
+                   help="H0 checkpoint from train_h0.py: frozen DINOv2 + our H0 (development only)")
     p.add_argument("--demo", action="store_true", help="Random data + demo baseline; checks the code only")
     p.add_argument("--fraction", type=float, default=1.0, help="Random fraction of training images")
     p.add_argument("--max-images", type=int, help="At most this many training images")
@@ -280,9 +282,15 @@ def main(argv=None):
 
     # Frozen baseline.
     use_demo_baseline = args.demo or args.demo_baseline
-    if not use_demo_baseline and args.baseline is None:
-        p.error("--baseline is required unless --demo or --demo-baseline")
-    base = load_baseline(None if use_demo_baseline else args.baseline, device, demo=use_demo_baseline)
+    chosen = sum([use_demo_baseline, args.baseline is not None, args.standin_baseline is not None])
+    if chosen != 1:
+        p.error("choose exactly one of --baseline, --standin-baseline, --demo-baseline / --demo")
+    if args.standin_baseline is not None:
+        from standin_baseline import load_standin      # only imported when used (needs torch.hub cache)
+        base = load_standin(args.standin_baseline, device)
+        print(f"Stand-in baseline: {args.standin_baseline} (DEVELOPMENT ONLY, not the staff baseline)")
+    else:
+        base = load_baseline(None if use_demo_baseline else args.baseline, device, demo=use_demo_baseline)
     base.eval()
     base.requires_grad_(False)
 
