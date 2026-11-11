@@ -104,6 +104,19 @@ z_{t+1} = z'' + FFN(z'')
 - **Pros:** clean separation; image keys/values can be cached across steps (see §4).
 - **Cons:** more pieces than option 1; 2× option 1's score matrix if done globally.
 
+### Option 4: Learned Combination for Concatenating / Aggregating z, X, A
+
+```
+h = W_z·z_t + W_X·X + W_A_t·A_t                    [N, d]
+Q = h·W_Q, J = h·W_J, V = h·W_V      [N, d_h] each   (projection)
+O = softmax(Q·Jᵀ/√d_h)·V             [N, d_h]        scores: N × N
+z_{t+1} = h + O·W_O → + FFN          [N, d]
+```
+
+```
+H = [ W_X·X ;  W_A_t·A_t ;  W_z_t·z_t] 
+```
+
 ### The linear algebra (single head)
 
 $N$ tokens per stream, width $d$, head width $d_h$; $W_Q, W_J, W_V \in \mathbb{R}^{d\times d_h}$
