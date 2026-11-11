@@ -6,6 +6,15 @@ from dataset import RoadDataset
 from encoder import build_encoder
 from encoder_baseline import EncoderBaseline
 from train import seg_loss
+import argparse
+
+parser = argparse.ArgumentParser()
+parser.add_argument(
+    "--encoder",
+    choices=("resnet34", "resnet50", "dino_vits16"),
+    default="resnet34",
+)
+args = parser.parse_args()
 
 torch.set_num_threads(1)
 torch.manual_seed(0)
@@ -30,7 +39,7 @@ images = image[crop].unsqueeze(0)
 targets = target[crop].unsqueeze(0)
 valid_pixels = valid[crop].unsqueeze(0)
 
-baseline = EncoderBaseline(build_encoder("resnet34"))
+baseline = EncoderBaseline(build_encoder(args.encoder))
 baseline.train()
 optimizer = torch.optim.AdamW(baseline.head.parameters(), lr=1e-3)
 
