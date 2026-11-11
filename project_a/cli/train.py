@@ -60,7 +60,36 @@ def edge_band(target, radius=3):
     return (dilated - eroded).clamp(0, 1)
 
 
-def seg_loss(logits, target, valid, pos_weight=1.0, dice_weight=1.0, edge_weight=1.0):
+def _soft_erode(x):
+    return -F.max_pool2d(-x, 3, stride=1, padding=1)
+
+
+def _soft_dilate(x):
+    return F.max_pool2d(x, 3, stride=1, padding=1)
+
+
+def soft_skeleton(x, iters=10):
+    """Differentiable skeleton (Shit et al., clDice, CVPR 2021)."""
+    skel = F.relu(x - _soft_dilate(_soft_erode(x)))
+    for _ in range(iters):
+        x = _soft_erode(x)
+        delta = F.relu(x - _soft_dilate(_soft_erode(x)))
+        skel = skel + F.relu(delta - skel * delta)
+    return skel
+
+
+def soft_cldice_loss(logits, target, valid, iters=10):
+    """1 - soft clDice over valid pixels; rewards connected, centred road skeletons."""
+    p = logits.float().sigmoid() * valid
+    t = target * valid
+    sp, st = soft_skeleton(p, iters), soft_skeleton(t, iters)
+    tprec = ((sp * t).sum() + 1) / (sp.sum() + 1)
+    tsens = ((st * p).sum() + 1) / (st.sum() + 1)
+    return 1 - 2 * tprec * tsens / (tprec + tsens)
+
+
+def seg_loss(logits, target, valid, pos_weight=1.0, dice_weight=1.0, edge_weight=1.0,
+             cldice_weight=0.0):
     """BCE + soft Dice over valid pixels only (no-data pixels excluded). Computed in fp32.
 
     edge_weight > 1 multiplies the BCE of pixels near road edges (the Boundary IoU band),
@@ -77,7 +106,10 @@ def seg_loss(logits, target, valid, pos_weight=1.0, dice_weight=1.0, edge_weight
     p = logits.sigmoid() * valid
     t = target * valid
     dice = 1 - (2 * (p * t).sum() + 1) / (p.sum() + t.sum() + 1)
-    return bce + dice_weight * dice
+    loss = bce + dice_weight * dice
+    if cldice_weight > 0:
+        loss = loss + cldice_weight * soft_cldice_loss(logits, target, valid)
+    return loss
 
 
 def unroll(model, features, initial_logits, steps):
@@ -338,6 +370,8 @@ def main(argv=None):
     p.add_argument("--pos-weight", type=float, default=1.0,
                    help="BCE weight on road pixels. Keep 1 with Dice; >1 over-predicts road at threshold 0.5")
     p.add_argument("--dice-weight", type=float, default=1.0)
+    p.add_argument("--cldice-weight", type=float, default=0.0,
+                   help="Weight of the soft-clDice loss (0 = off), e.g. 0.5")
     p.add_argument("--edge-weight", type=float, default=1.0,
                    help="BCE multiplier on pixels within 3 px of a road edge (1 = off), e.g. 4")
     p.add_argument("--stress-aug", type=float, default=0.3,
@@ -458,7 +492,8 @@ def main(argv=None):
             refiner_in = degrade_logits(initial_logits, args.y0_aug, model.patch)
             with torch.autocast(device.type, dtype=torch.bfloat16, enabled=use_amp):
                 outputs = unroll(model, features, refiner_in, args.steps)
-            step_losses = [seg_loss(y, target, valid, args.pos_weight, args.dice_weight, args.edge_weight)
+            step_losses = [seg_loss(y, target, valid, args.pos_weight, args.dice_weight, args.edge_weight,
+                                    args.cldice_weight)
                            for y in outputs]
             loss = sum(w * l for w, l in zip(weights, step_losses))
             opt.zero_grad(set_to_none=True)
@@ -470,7 +505,7 @@ def main(argv=None):
             total += loss.item()
             with torch.no_grad():
                 base_total += seg_loss(initial_logits, target, valid, args.pos_weight,
-                                       args.dice_weight, args.edge_weight).item()
+                                       args.dice_weight, args.edge_weight, args.cldice_weight).item()
             for i, l in enumerate(step_losses):
                 step_totals[i] += l.item()
         n = max(len(loader), 1)

@@ -48,11 +48,14 @@ class GridTokenizer(nn.Module):
     def __init__(self, c_in, d=256, patch=16) -> None:
         super().__init__()
         self.patch = patch
+        # attempt7: normalize the frozen features per location first. Raw DINOv2 tokens
+        # have a large norm and swamped the answer branch, so the core barely saw y_t.
+        self.feat_norm = nn.LayerNorm(c_in)
         # Image branch: per-location MLP on the (pooled) baseline features.
         self.feat = nn.Sequential(nn.Conv2d(c_in, d, 1), nn.GELU(), nn.Conv2d(d, d, 1))
-        # Answer branch: patch embedding of [probability, scaled clamped logit].
-        # Probabilities keep the input scale fixed whatever the baseline's confidence.
-        self.ans = nn.Conv2d(2, d, kernel_size=patch, stride=patch)
+        # Answer branch: patch embedding of [probability, scaled clamped logit, uncertainty].
+        # attempt7: uncertainty 4p(1-p) is 1 where the answer is unsure (edges, gaps), 0 where sure.
+        self.ans = nn.Conv2d(3, d, kernel_size=patch, stride=patch)
         self.norm = nn.LayerNorm(d)
 
     def forward(self, features, logits, offset=None):
@@ -62,7 +65,9 @@ class GridTokenizer(nn.Module):
             raise ValueError(f"Image {H}x{W} is smaller than patch {self.patch}")
         # Resample features onto the patch grid (any baseline stride works).
         f = F.adaptive_avg_pool2d(features, (h, w))                        # [B, C, h, w]
-        y = torch.cat([logits.sigmoid(), logits.clamp(-10, 10) / 10], dim=1)
+        f = self.feat_norm(f.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)       # LayerNorm over C
+        p = logits.sigmoid()
+        y = torch.cat([p, logits.clamp(-10, 10) / 10, 4 * p * (1 - p)], dim=1)
         x = self.feat(f) + self.ans(y)[..., :h, :w]                         # [B, d, h, w]
         x = x.flatten(2).transpose(1, 2)                                    # [B, N, d]
         x = x + pos2d(h, w, x.shape[-1], x.device, offset)
@@ -101,7 +106,7 @@ class Head(nn.Module):
     straighten an edge that a 1/16-resolution baseline blurred over 16-px blocks.
     """
 
-    def __init__(self, d=256, patch=16, hidden=64, dilations=(1, 2, 4, 8, 1)) -> None:
+    def __init__(self, d=256, patch=16, hidden=64, dilations=(1, 2, 4, 8, 1), ctx=16) -> None:
         super().__init__()
         self.patch = patch
         self.norm = nn.LayerNorm(d)
@@ -110,22 +115,35 @@ class Head(nn.Module):
         # changes the mask (the staff tests check that updates change the prediction).
         nn.init.normal_(self.proj.weight, std=0.01)
         nn.init.zeros_(self.proj.bias)
-        layers, c = [], 2
+        # attempt7: a few channels of the core's output tokens, upsampled, so the
+        # full-resolution stack knows WHAT the core decided around each pixel (road
+        # direction, "this gap should be connected"), not only the 1-channel dy.
+        # This is state (core output), never the image: still not a segmentation bypass.
+        self.ctx = nn.Linear(d, ctx)
+        layers, c = [], 2 + ctx
         for dil in dilations:
             layers += [nn.Conv2d(c, hidden, 3, padding=dil, dilation=dil), nn.GELU()]
             c = hidden
-        layers.append(nn.Conv2d(hidden, 1, 3, padding=1))
+        # attempt7: two outputs, a residual r and a gate g: dy = (coarse + r) * sigmoid(g + 2).
+        # The gate lets a step leave already-correct pixels alone, which keeps K=1 from
+        # dropping below K=0 and keeps K=6/8 stable.
+        layers.append(nn.Conv2d(hidden, 2, 3, padding=1))
         self.refine = nn.Sequential(*layers)
-        # Last conv starts at zero, so at initialization dy is just the coarse correction.
+        # Last conv starts at zero: r = 0, gate = sigmoid(2) ~ 0.88 at initialization.
         nn.init.zeros_(self.refine[-1].weight)
         nn.init.zeros_(self.refine[-1].bias)
 
     def forward(self, tokens, h, w, logits):
         H, W = logits.shape[-2:]
         B = tokens.shape[0]
-        x = self.proj(self.norm(tokens))                                     # [B, h*w, patch^2]
+        t = self.norm(tokens)
+        x = self.proj(t)                                                     # [B, h*w, patch^2]
         x = x.transpose(1, 2).reshape(B, self.patch * self.patch, h, w)
         dy = F.pixel_shuffle(x, self.patch)                                  # [B, 1, h*patch, w*patch]
         if tuple(dy.shape[-2:]) != (H, W):
             dy = F.interpolate(dy, size=(H, W), mode="bilinear", align_corners=False)
-        return dy + self.refine(torch.cat([dy, logits.sigmoid().to(dy.dtype)], dim=1))
+        c = self.ctx(t).transpose(1, 2).reshape(B, -1, h, w)                 # [B, ctx, h, w]
+        c = F.interpolate(c, size=(H, W), mode="bilinear", align_corners=False)
+        out = self.refine(torch.cat([dy, logits.sigmoid().to(dy.dtype), c.to(dy.dtype)], dim=1))
+        r, g = out[:, :1], out[:, 1:]
+        return (dy + r) * torch.sigmoid(g + 2.0)
