@@ -1,5 +1,6 @@
 .DS_Store
 .env
+*.zip
 
 # Data and outputs (fetch data from SCC; see README)
 data/
