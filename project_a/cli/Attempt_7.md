@@ -1,5 +1,6 @@
 # attempt7: recurrent refiner on a DINOv2 stand-in baseline
 
+runing
 DEVELOPMENT ONLY. The baseline here is our own stand-in (frozen DINOv2 ViT-S/14 + a small
 H0 head we trained), not the staff baseline. These refiner weights only work on top of
 that stand-in and are not a leaderboard entry.
