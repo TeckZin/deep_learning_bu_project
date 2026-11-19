@@ -89,16 +89,11 @@ git pull                       # if it complains about local edits: git stash &&
 To send SCC edits back: `git status`, `git add <files>`, `git commit -m "..."`, `git push`.
 Always `git pull` before editing, on both Mac and SCC.
 
-### 4. Python environment (shared, created once for the team)
-Everyone uses `/projectnb/ec523kb/projects/CowenZeollaZinTan/envs/dl_env`. Only if it does not exist yet (one member, once):
-```bash
-module load miniconda
-conda create -p /projectnb/ec523kb/projects/CowenZeollaZinTan/envs/dl_env python=3.12 -y
-conda activate /projectnb/ec523kb/projects/CowenZeollaZinTan/envs/dl_env
-pip install -r project_a/cli/requirements.txt
-```
-Every new shell (including after `qrsh`): `module load miniconda && conda activate /projectnb/ec523kb/projects/CowenZeollaZinTan/envs/dl_env`.
-Check: `which python` should contain `envs/dl_env`. Batch jobs activate it themselves (`jobs/common.sh`).
+### 4. Python environment (shared)
+For now everyone uses samc's venv `/projectnb/ec523kb/projects/CowenZeollaZinTan/envs/samc/midway` (Python 3.12.4, matches
+`project_a/cli/requirements.txt`, CUDA PyTorch). A team-owned `envs/dl_env` is planned (see `docs/SCC.md`).
+Every new shell (including after `qrsh`): `module load python3/3.12.4 && source /projectnb/ec523kb/projects/CowenZeollaZinTan/envs/samc/midway/bin/activate`.
+Check: `which python` should contain `envs/samc/midway`. Batch jobs activate it themselves (`jobs/common.sh`).
 DINOv2 weights are cached for everyone in `/projectnb/ec523kb/projects/CowenZeollaZinTan/cache/torch`; download once on a login node:
 `TORCH_HOME=/projectnb/ec523kb/projects/CowenZeollaZinTan/cache/torch python -c "import torch; torch.hub.load('facebookresearch/dinov2', 'dinov2_vits14', trust_repo=True)"`.
 
@@ -106,7 +101,7 @@ DINOv2 weights are cached for everyone in `/projectnb/ec523kb/projects/CowenZeol
 Login nodes (`scc1`) have no GPU. Get an interactive GPU shell for testing:
 ```bash
 qrsh -P ec523kb -l gpus=1 -l gpu_c=7.0 -l h_rt=01:00:00
-module load miniconda && conda activate /projectnb/ec523kb/projects/CowenZeollaZinTan/envs/dl_env
+module load python3/3.12.4 && source /projectnb/ec523kb/projects/CowenZeollaZinTan/envs/samc/midway/bin/activate
 cd /projectnb/ec523kb/projects/CowenZeollaZinTan/code/<BU_USER>/deep_learning_bu_project/project_a/cli
 nvidia-smi                                                        # GPU model + memory
 python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
@@ -181,7 +176,7 @@ scp scc:/projectnb/ec523kb/projects/CowenZeollaZinTan/code/<BU_USER>/deep_learni
 |---|---|
 | Connect | `ssh scc` |
 | Interactive GPU (1 h) | `qrsh -P ec523kb -l gpus=1 -l gpu_c=7.0 -l h_rt=01:00:00` |
-| Activate env | `module load miniconda && conda activate /projectnb/ec523kb/projects/CowenZeollaZinTan/envs/dl_env` |
+| Activate env | `module load python3/3.12.4 && source /projectnb/ec523kb/projects/CowenZeollaZinTan/envs/samc/midway/bin/activate` |
 | Check GPU | `nvidia-smi` |
 | Submit / status / cancel job | `bash jobs/cv.sh <exp> 0` / `qstat -u <BU_USER>` / `qdel <JOB_ID>` |
 | Disk usage of the team space | `du -sh /projectnb/ec523kb/projects/CowenZeollaZinTan/*` |

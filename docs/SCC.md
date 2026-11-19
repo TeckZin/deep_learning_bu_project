@@ -10,7 +10,7 @@ implementations can be tried in parallel. Code layout inside the repo: [CodeStru
 $TEAM/
 ├── README.md                              short version of this page
 ├── code/<login>/deep_learning_bu_project  your OWN clone, your own branch
-├── envs/dl_env                            ONE shared conda env (jobs activate it by path)
+├── envs/samc/midway                       shared venv used by everyone for now (envs/dl_env planned)
 ├── cache/torch                            TORCH_HOME: DINOv2 weights, downloaded once
 ├── data/                                  derived data only: fold manifests, stress copies
 ├── runs/                                  ALL training output, shared
@@ -68,17 +68,27 @@ TEAM=/projectnb/ec523kb/projects/CowenZeollaZinTan
 mkdir -p $TEAM/code/$USER && cd $TEAM/code/$USER
 git clone https://github.com/TeckZin/deep_learning_bu_project.git && cd deep_learning_bu_project
 ln -s $TEAM/runs project_a/cli/weights && ln -s $TEAM/runs/logs project_a/cli/logs
-module load miniconda && conda activate $TEAM/envs/dl_env
+module load python3/3.12.4 && source $TEAM/envs/samc/midway/bin/activate
 cd project_a/cli && python -m unittest discover -s tests          # 35 tests
 ```
-Once for the team (whoever is first), from your clone's `project_a/cli`:
+Once for the team (done 2026-11-18: DINOv2 is in `cache/torch`), from your clone's `project_a/cli`:
 ```bash
 cd $TEAM/code/$USER/deep_learning_bu_project/project_a/cli
-conda create -p $TEAM/envs/dl_env python=3.12 -y && conda activate $TEAM/envs/dl_env
-pip install -r requirements.txt
 TORCH_HOME=$TEAM/cache/torch python -c "import torch; torch.hub.load('facebookresearch/dinov2', 'dinov2_vits14', trust_repo=True)"
 export ROADSEG_DATA=/projectnb/ec523kb/projects/RoadSeg/dataset
 python splits.py make        # then commit project_a/cli/splits/folds.csv
 ```
 Batch jobs set `ROADSEG_DATA`, `TORCH_HOME` and the env themselves (`jobs/common.sh`; override with
-`TEAM_ROOT`, `ROADSEG_ENV`, `TORCH_HOME`). Training: README section 9 or `bash jobs/cv.sh <experiment> 0`.
+`TEAM_ROOT`, `ROADSEG_ENV`, `TORCH_HOME`). `jobs/common.sh` accepts a conda env (`conda activate`) or a venv
+(`module load python3/3.12.4` + `bin/activate`).
+
+## Environment (current and planned)
+
+- **Now:** `envs/samc/midway`, a venv (`python3 -m venv` from the `python3/3.12.4` module) with the packages
+  of `project_a/cli/requirements.txt`. It is owned by samc: install or upgrade packages only after asking.
+- **Planned:** a team-owned `envs/dl_env` built the same way, then make it the default in `jobs/common.sh`:
+  ```bash
+  module load python3/3.12.4
+  python3 -m venv $TEAM/envs/dl_env && source $TEAM/envs/dl_env/bin/activate
+  pip install -r project_a/cli/requirements.txt
+  ``` Training: README section 9 or `bash jobs/cv.sh <experiment> 0`.
