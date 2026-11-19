@@ -1,5 +1,10 @@
 # attempt7: recurrent refiner on a DINOv2 stand-in baseline
 
+> **Historical.** File names, flags and commands below describe the code at git tag `attempt7`
+> (`git checkout attempt7` to rerun them). In the current code the architecture is the
+> `attempt7` preset in `submission/config.py` (same weights load unchanged), the stand-in
+> baseline is `frozen_encoder.py`, and the recipe is `experiments/attempt7.json` on the CV folds.
+
 DEVELOPMENT ONLY. The baseline here is our own stand-in (frozen DINOv2 ViT-S/14 + a small
 H0 head we trained), not the staff baseline. These refiner weights only work on top of
 that stand-in and are not a leaderboard entry.

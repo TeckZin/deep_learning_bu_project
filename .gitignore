@@ -6,6 +6,10 @@
 data/
 smoke_outputs/
 predictions/
+weights/
+dist/
+logs/
+val_fold*/
 
 # Checkpoints
 *.safetensors

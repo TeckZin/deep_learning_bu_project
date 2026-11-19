@@ -48,7 +48,9 @@ Output goes to `project_a/data/<SPLIT>/{Urban,Rural}/{images_png,masks_png}/` (g
 | `scripts/fetch_data_slice.sh` | first 25 Urban + 25 Rural **Val** tiles (100 files) | 69 MB | Evaluation only: metrics, K sweeps, baseline comparison, visualizing masks |
 
 ## Environment
-`pip install -r requirements_mac.txt` (or `requirements_scc.txt`, which pulls in `project_a/cli/requirements.txt`).
+`pip install -r project_a/cli/requirements.txt` (Python 3.12). On a Mac whose default Python is newer:
+`cd project_a/cli && uv venv --python 3.12 .venv && uv pip install --python .venv/bin/python -r requirements.txt`.
+On SCC, use the shared environment (section 4 below).
 
 ## Working on SCC
 
@@ -58,18 +60,20 @@ All commands below run **on SCC** unless marked "on your Mac". Replace `<BU_USER
 | What | Path |
 |---|---|
 | Dataset (read in place, never copy) | `/projectnb/ec523kb/projects/RoadSeg/dataset/{Train,Val}/{Urban,Rural}/{images_png,masks_png}` |
-| Your workspace (code, env, outputs) | `/projectnb/ec523kb/students/<BU_USER>/` |
-| This repo on SCC | `/projectnb/ec523kb/students/<BU_USER>/deep_learning_bu_project` |
+| Team space (code, env, outputs) | `/projectnb/ec523kb/projects/CowenZeollaZinTan/` (layout: [`docs/SCC.md`](docs/SCC.md)) |
+| Your clone on SCC | `/projectnb/ec523kb/projects/CowenZeollaZinTan/code/<BU_USER>/deep_learning_bu_project` |
 | CLI scripts | `.../deep_learning_bu_project/project_a/cli` |
 
-Your SCC home has a 10 GB quota, so keep the repo, conda env and outputs under `/projectnb/ec523kb/students/<BU_USER>/`.
+Your SCC home has a 10 GB quota, so keep code, env and outputs in the team space. Each member has their own clone; checkpoints and logs go to the shared `runs/` folder (see [`docs/SCC.md`](docs/SCC.md)).
 
 ### 2. Get the code (first time: clone)
 ```bash
 ssh scc
-cd /projectnb/ec523kb/students/<BU_USER>
+mkdir -p /projectnb/ec523kb/projects/CowenZeollaZinTan/code/<BU_USER> && cd /projectnb/ec523kb/projects/CowenZeollaZinTan/code/<BU_USER>
 git clone https://github.com/TeckZin/deep_learning_bu_project.git
 cd deep_learning_bu_project
+ln -s /projectnb/ec523kb/projects/CowenZeollaZinTan/runs      project_a/cli/weights   # outputs go to the shared runs/ folder
+ln -s /projectnb/ec523kb/projects/CowenZeollaZinTan/runs/logs project_a/cli/logs
 git config user.name "<GitHub name>"        # this repo only, no --global
 git config user.email "<GitHub email>"
 ```
@@ -79,107 +83,108 @@ Pushing over HTTPS needs a GitHub **personal access token** as the password
 
 ### 3. Update the code (every session: pull)
 ```bash
-cd /projectnb/ec523kb/students/<BU_USER>/deep_learning_bu_project
+cd /projectnb/ec523kb/projects/CowenZeollaZinTan/code/<BU_USER>/deep_learning_bu_project
 git pull                       # if it complains about local edits: git stash && git pull
 ```
 To send SCC edits back: `git status`, `git add <files>`, `git commit -m "..."`, `git push`.
 Always `git pull` before editing, on both Mac and SCC.
 
-### 4. Python environment (once)
+### 4. Python environment (shared, created once for the team)
+Everyone uses `/projectnb/ec523kb/projects/CowenZeollaZinTan/envs/dl_env`. Only if it does not exist yet (one member, once):
 ```bash
-module load miniconda          # `module avail miniconda` if the name differs
-conda create -n dl_env python=3.12 -y
-conda activate dl_env
-pip install -r requirements_scc.txt pytest
+module load miniconda
+conda create -p /projectnb/ec523kb/projects/CowenZeollaZinTan/envs/dl_env python=3.12 -y
+conda activate /projectnb/ec523kb/projects/CowenZeollaZinTan/envs/dl_env
+pip install -r project_a/cli/requirements.txt
 ```
-Every new shell (including after `qrsh`): `module load miniconda && conda activate dl_env`.
-Check you are in the env: `which python` should contain `dl_env`.
+Every new shell (including after `qrsh`): `module load miniconda && conda activate /projectnb/ec523kb/projects/CowenZeollaZinTan/envs/dl_env`.
+Check: `which python` should contain `envs/dl_env`. Batch jobs activate it themselves (`jobs/common.sh`).
+DINOv2 weights are cached for everyone in `/projectnb/ec523kb/projects/CowenZeollaZinTan/cache/torch`; download once on a login node:
+`TORCH_HOME=/projectnb/ec523kb/projects/CowenZeollaZinTan/cache/torch python -c "import torch; torch.hub.load('facebookresearch/dinov2', 'dinov2_vits14', trust_repo=True)"`.
 
 ### 5. Get a GPU and check it
 Login nodes (`scc1`) have no GPU. Get an interactive GPU shell for testing:
 ```bash
 qrsh -P ec523kb -l gpus=1 -l gpu_c=7.0 -l h_rt=01:00:00
-module load miniconda && conda activate dl_env
-cd /projectnb/ec523kb/students/<BU_USER>/deep_learning_bu_project/project_a/cli
+module load miniconda && conda activate /projectnb/ec523kb/projects/CowenZeollaZinTan/envs/dl_env
+cd /projectnb/ec523kb/projects/CowenZeollaZinTan/code/<BU_USER>/deep_learning_bu_project/project_a/cli
 nvidia-smi                                                        # GPU model + memory
 python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
 ```
 The second line should print `True` and the GPU name. Type `exit` to give the GPU back.
 
 ### 6. Run the tests
-From `project_a/cli`:
+From `project_a/cli` (locally: `uv venv --python 3.12 .venv && uv pip install --python .venv/bin/python -r requirements.txt`):
 ```bash
-python -m pytest tests/ -v                     # expect 27 passed
+python -m unittest discover -s tests -v        # staff tests + ours (tests/test_project.py)
 rm -rf smoke_outputs && python smoke_test.py --output smoke_outputs
 ```
 
-### 7. Test-train on a small slice
-Until staff release the trained baseline, `--demo-baseline` trains on real data with the untrained demo baseline. This only checks the pipeline; the weights are throwaway.
+### 7. How the code is organised
+**Start with [`docs/CodeStructure.md`](docs/CodeStructure.md)**: diagrams, entry points and a file map. To change a stage: [`docs/ChangingTheArchitecture.md`](docs/ChangingTheArchitecture.md). Design decisions: `docs/ModularRefactorPlan.md`. In short (all in `project_a/cli`):
+
+| Stage | File |
+|---|---|
+| Data, augmentation, crops | `data.py` |
+| CV folds; which data trains H0 vs the refiner | `splits.py` → `splits/folds.csv` (committed) |
+| Frozen encoder (DINOv2) + H0 head → `(f, y0)` | `frozen_encoder.py`, trained by `train_h0.py` |
+| Refiner (shipped): tokenizer, state, core, head | `submission/` (`config.py` holds the architecture presets) |
+| Losses / evaluation | `losses.py` / `evaluation.py` |
+| Training recipes | `experiments/<name>.json` |
+| Leaderboard inference / zip | `infer.py` / `export_submission.py` |
+
+### 8. Cross-validation folds (once for the team)
+Train + Val are pooled into 5 folds stratified by urban/rural (the leaderboard is the test set):
 ```bash
-python train.py --data-root /projectnb/ec523kb/projects/RoadSeg/dataset/Train \
-  --demo-baseline --max-images 100 --epochs 1 --steps 2 \
-  --output weights/test.safetensors --device cuda
+export ROADSEG_DATA=/projectnb/ec523kb/projects/RoadSeg/dataset
+python splits.py make                       # writes splits/folds.csv -> commit it
+python splits.py manifest --fold 0 --out val_fold0 --stress    # optional: manifest + stress copy for predict.py / evaluate.py
 ```
-Expected: `Rural: 1366 images`, `Urban: 1156 images`, `100 training images`, an epoch loss, `Saved ...`.
 
-Useful `train.py` options: `--fraction 0.1` (random 10% of images), `--max-images N`, `--steps K`, `--epochs`, `--batch-size`, `--lr`, `--seed` (same seed = same subset). Real runs use `--baseline <path>` instead of `--demo-baseline`.
-
-### 8. Evaluate locally on Val
-Official manifests come from staff; `make_manifest.py` builds a local one from Val so you can score runs now.
-```bash
-python make_manifest.py --data-root /projectnb/ec523kb/projects/RoadSeg/dataset/Val \
-  --output val_small --max-per-domain 50          # drop --max-per-domain for the full Val set
-
-python predict.py --demo --checkpoint weights/test.safetensors \
-  --input val_small/images --output predictions/val_k2 --steps 2 --device cuda
-python evaluate.py --manifest val_small/manifest.json \
-  --predictions predictions/val_k2 --output reports/val_k2.json
-```
-Drop `--demo` and add `--baseline <path>` once the real baseline exists. The leaderboard combines K = 1, 2, 4 plus a stress run at K = 4 via `score.py` (`make_stress.py --manifest ...` builds the stress set). `--output` folders must be new or empty.
-
-### 9. Full training as a batch job
-Edit paths in `project_a/cli/train_job.sh` (repo path, `--baseline`, options), then:
+### 9. Training (batch jobs)
+A run validates on one fold and trains on the other four. H0 heads come first (out-of-fold by
+default: the refiner's y0 always comes from an H0 that never saw that image), then the refiner:
 ```bash
 mkdir -p logs
-qsub train_job.sh              # submit
-qstat -u <BU_USER>             # status: qw = waiting, r = running
-tail -f logs/train_*.log       # watch output (Ctrl+C to stop watching)
-qdel <JOB_ID>                  # cancel a job
+bash jobs/cv.sh attempt8 0               # fold 0: H0 job, then refiner job (held until H0 finishes)
+bash jobs/cv.sh attempt8 "0 1 2 3 4"     # all five folds
+qstat -u <BU_USER>                       # status: qw = waiting, r = running
+tail -F logs/attempt8_f0.*.log
 ```
-The checkpoint is saved after every epoch, so a killed job still leaves the latest weights.
+- New experiment: copy `experiments/attempt8.json`, change it, give it a new `"run"` name.
+  Jobs write to `weights/<BU_USER>-<run>/fold<F>/` (= the shared `runs/`), so members never share a run folder.
+  Per-fold settings go in `"fold_overrides": {"2": {"lr": 1e-4}}`.
+- Architecture: `"arch"` picks a preset in `submission/config.py`; ablations without a new preset:
+  `bash jobs/cv.sh attempt8 0 --set core.layers=6 --run <BU_USER>-attempt8-l6`.
+- Halves instead of out-of-fold: `"h0_scheme": "halves"`.
+- Outputs: `weights/<BU_USER>-<run>/fold<F>/refiner_best.safetensors` (+ `run.json` with every setting and the git commit).
+  Re-submitting continues a killed job from its last epoch; `train.py` refuses to reuse a run folder with different settings.
+- Quick check on an interactive GPU: `python train.py --config experiments/attempt8.json --val-fold 0 --max-images 50 --val-max-images 20 --epochs 1`.
 
 ### 10. Package the submission
-From `project_a/cli` (adjust the checkpoint path to the nominated one):
 ```bash
-zip -r ~/project_a_submission.zip \
-  predict.py baseline.py common.py requirements.txt README.md \
-  submission/ weights/refiner.safetensors \
-  -x "*/__pycache__/*" "*.pyc"
-unzip -l ~/project_a_submission.zip            # check: no data, predictions, demo or extra checkpoints
+python export_submission.py --refiner weights/<BU_USER>-attempt8/fold0/refiner_best.safetensors \
+  --out dist/submission --zip --check val_fold0/images
+unzip -l dist/submission.zip                     # infer.py, frozen_encoder.py, submission/, ONE weights file
 ```
-Clean-room test (what the TAs recommend):
+`--check` unpacks into an empty folder and runs `infer.py` there, like a teammate starting from the zip.
+The leaderboard runs `python infer.py --input IMAGES --output OUT`, which writes `OUT/k<K>/<id>.png`
+(1 = road, 0 = non-road) for K = 0, 1, 2, 4, 6, 8. Before submitting, set `ACTIVE` in
+`submission/config.py` to the submitted preset so the staff `predict.py` builds the same model.
+Copy it to your Mac — **run this on your Mac**, not on SCC:
 ```bash
-rm -rf ~/zip_test && mkdir ~/zip_test && cd ~/zip_test
-unzip ~/project_a_submission.zip
-python predict.py --checkpoint weights/refiner.safetensors --baseline <baseline> \
-  --input /projectnb/ec523kb/students/<BU_USER>/deep_learning_bu_project/project_a/cli/val_small/images \
-  --output test_out --steps 4 --device cuda
+scp scc:/projectnb/ec523kb/projects/CowenZeollaZinTan/code/<BU_USER>/deep_learning_bu_project/project_a/cli/dist/submission.zip ~/Downloads/
 ```
-Copy it to your Mac — **run this on your Mac**, not on SCC (prompt must not show `[<BU_USER>@scc-...]`):
-```bash
-scp scc:~/project_a_submission.zip ~/Downloads/
-```
-Then upload `~/Downloads/project_a_submission.zip` to the Project A assignment on Gradescope. Check the Gradescope page and handout for any required zip name or layout.
 
 ### SCC quick reference
 | Task | Command |
 |---|---|
 | Connect | `ssh scc` |
 | Interactive GPU (1 h) | `qrsh -P ec523kb -l gpus=1 -l gpu_c=7.0 -l h_rt=01:00:00` |
-| Activate env | `module load miniconda && conda activate dl_env` |
+| Activate env | `module load miniconda && conda activate /projectnb/ec523kb/projects/CowenZeollaZinTan/envs/dl_env` |
 | Check GPU | `nvidia-smi` |
-| Submit / status / cancel job | `qsub train_job.sh` / `qstat -u <BU_USER>` / `qdel <JOB_ID>` |
-| Disk usage in your folder | `du -sh /projectnb/ec523kb/students/<BU_USER>` |
+| Submit / status / cancel job | `bash jobs/cv.sh <exp> 0` / `qstat -u <BU_USER>` / `qdel <JOB_ID>` |
+| Disk usage of the team space | `du -sh /projectnb/ec523kb/projects/CowenZeollaZinTan/*` |
 | Copy SCC → Mac (on Mac) | `scp scc:<path> ~/Downloads/` |
 
 ## Docs and readings
@@ -223,6 +228,7 @@ Metrics and data:
 - [ ] `initialize(f, y0)` → z0, with no core call
 - [ ] `step(f, z, y)` → (z_next, y_next), exactly one core call, no labels or total K
 - [ ] No independent CNN/U-Net segmentation bypass
+- [ ] Image used only inside the loop (in `step()`), never on the final prediction after step K (TA, 2026-11-18)
 - [ ] Passes `predict.py` checks at K = 0 through 8
 - [ ] Prefix consistency: steps 0–2 of a K = 4 run match a K = 2 run
 - [ ] Export weights to `submission/model.safetensors`
