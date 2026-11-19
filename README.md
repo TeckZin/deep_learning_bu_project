@@ -47,6 +47,19 @@ Output goes to `project_a/data/<SPLIT>/{Urban,Rural}/{images_png,masks_png}/` (g
 | `scripts/fetch_data_slice.sh 10 Train` | first 10 Urban + 10 Rural **Train** tiles (40 files) | 29 MB | Overfit tests and training-loop debugging (gradients, ignore mask, feedback) |
 | `scripts/fetch_data_slice.sh` | first 25 Urban + 25 Rural **Val** tiles (100 files) | 69 MB | Evaluation only: metrics, K sweeps, baseline comparison, visualizing masks |
 
+### Visualize raw masks
+
+Raw LoveDA masks store class IDs 0–7, so they look almost black in an image viewer.
+Use a fixed color per class and include a legend (requires `numpy`, `Pillow`, and
+`matplotlib`; install Matplotlib with `python -m pip install matplotlib` if needed):
+
+```bash
+python scripts/visualize_mask.py ../00.png --image ../0.png -o outputs/00_semantic.png
+```
+
+Omit `--image` to show only the colorized mask. The inputs stay unchanged, and
+the legend marks classes absent from the mask. Uses the raw [LoveDA class IDs](https://github.com/Junjue-Wang/LoveDA#readme), including 0 for ignored pixels.
+
 ## Environment
 `pip install -r requirements_mac.txt` (or `requirements_scc.txt`, which pulls in `project_a/cli/requirements.txt`).
 
