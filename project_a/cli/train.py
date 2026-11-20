@@ -29,8 +29,11 @@ Writes to weights/<run>/fold<val>/ (or next to --output):
     refiner_best.safetensors   best validation score
     refiner.resume.pt          for --resume
     run.json                   all settings, git commit, H0 used for validation/inference
+    history.csv                one row per epoch (0 = before training): lr, train loss per step, and on
+                               validation epochs val loss + quality / IoU / clDice / BIoU per K
 """
 import argparse
+import csv
 from dataclasses import asdict
 import json
 import math
@@ -46,7 +49,7 @@ from safetensors.torch import save_file
 
 from frozen_encoder import load_frozen_encoder
 from data import DemoDataset, StressAugment, TileDataset, augment_tiles, degrade_logits, random_crops, subset_rows
-from evaluation import print_val, selection_score, validate
+from evaluation import VAL_KS, print_val, selection_score, validate
 from losses import seg_loss
 from splits import DEFAULT_FOLDS, default_data_root, fold_plan, read_folds
 from submission.config import ACTIVE, apply_overrides, config_to_json, get_config
@@ -93,6 +96,35 @@ def save_weights(model, path, metadata):
     state = {k: v.detach().contiguous().cpu() for k, v in model.state_dict().items()}
     save_file(state, str(path), metadata=metadata)
     return path
+
+
+def history_columns(steps):
+    """Fixed history.csv header, so rows written before and after a resume line up."""
+    columns = ["epoch", "lr", "train_loss", "train_y0", "train_input"]
+    columns += [f"train_y{i}" for i in range(1, steps + 1)]
+    for k in VAL_KS:
+        columns += [f"val_{name}_k{k}" for name in ("loss", "quality", "iou", "cldice", "biou")]
+    return columns + ["val_stress_quality_k4"]
+
+
+def val_cells(results, stress=None):
+    """Validation results -> history.csv cells (metrics in %, as in the log)."""
+    cells = {}
+    for k, s in results.items():
+        cells.update({f"val_loss_k{k}": s.get("loss"), f"val_quality_k{k}": 100 * s["quality"],
+                      f"val_iou_k{k}": 100 * s["road_iou"], f"val_cldice_k{k}": 100 * s["cldice"],
+                      f"val_biou_k{k}": 100 * s["boundary_iou"]})
+    if stress is not None:
+        cells["val_stress_quality_k4"] = 100 * stress[4]["quality"]
+    return cells
+
+
+def write_history(path, columns, rows):
+    """Rewrite history.csv from the list of row dicts (missing cells stay empty)."""
+    with open(path, "w", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=columns)
+        writer.writeheader()
+        writer.writerows(rows)
 
 
 def git_commit():
@@ -306,6 +338,7 @@ def main(argv=None):
     check_run_dir(out.with_name("run.json"), record, args, p, resume_path)
     out.with_name("run.json").write_text(json.dumps(record, indent=1))
     start_epoch, best_score, best_epoch = 0, -1.0, None
+    history_path, columns, history = out.with_name("history.csv"), history_columns(args.steps), []
     if args.resume:
         ckpt = torch.load(str(args.resume), map_location=device, weights_only=False)  # our own file
         model.load_state_dict(ckpt["model"])
@@ -313,15 +346,21 @@ def main(argv=None):
         sched.load_state_dict(ckpt["sched"])
         start_epoch, best_score, best_epoch = ckpt["epoch"], ckpt["best_score"], ckpt["best_epoch"]
         print(f"Resumed from {args.resume} at epoch {start_epoch}")
+        if history_path.is_file():          # keep rows up to the resumed epoch (drop a half-finished one)
+            with open(history_path, newline="") as fh:
+                history = [r for r in csv.DictReader(fh) if int(r["epoch"]) <= start_epoch]
 
     stress_rows = None
     if args.val_stress_manifest:
         from common import load_manifest
         stress_rows = load_manifest(args.val_stress_manifest)
+    loss_args = (args.pos_weight, args.dice_weight, args.edge_weight, args.cldice_weight)
     if val_rows and start_epoch == 0:
-        start = validate(model, eval_base, val_rows, device)
+        start = validate(model, eval_base, val_rows, device, loss_args=loss_args)
         start_stress = validate(model, eval_base, stress_rows, device, ks=(0, 4)) if stress_rows else None
         print_val(start, "before training", start_stress)
+        history.append({"epoch": 0, **val_cells(start, start_stress)})
+        write_history(history_path, columns, history)
         print(f"  frozen encoder + H0 alone (K=0): quality {100 * start[0]['quality']:.2f}  <- the number to beat")
 
     # Train.
@@ -345,7 +384,6 @@ def main(argv=None):
             refiner_in = degrade_logits(initial_logits, args.y0_aug, model.patch)
             with torch.autocast(device.type, dtype=torch.bfloat16, enabled=use_amp):
                 outputs = unroll(model, features, refiner_in, args.steps, args.detach_y)
-            loss_args = (args.pos_weight, args.dice_weight, args.edge_weight, args.cldice_weight)
             step_losses = [seg_loss(y, target, valid, *loss_args) for y in outputs]
             loss = sum(w * l for w, l in zip(weights, step_losses))
             opt.zero_grad(set_to_none=True)
@@ -368,17 +406,23 @@ def main(argv=None):
         print("  train loss by step:  y0 " + f"{base_total / n:.4f} (input {in_total / n:.4f})"
               + "".join(f" | y{i + 1} {s / n:.4f}" for i, s in enumerate(step_totals)), flush=True)
         save_weights(model, out, meta)
+        row = {"epoch": epoch + 1, "lr": sched.get_last_lr()[0], "train_loss": total / n,
+               "train_y0": base_total / n, "train_input": in_total / n,
+               **{f"train_y{i + 1}": s / n for i, s in enumerate(step_totals)}}
 
         last = epoch + 1 == args.epochs
         if val_rows and (last or (args.val_every > 0 and (epoch + 1) % args.val_every == 0)):
-            results = validate(model, eval_base, val_rows, device)
+            results = validate(model, eval_base, val_rows, device, loss_args=loss_args)
             stress = validate(model, eval_base, stress_rows, device, ks=(4,)) if stress_rows else None
             print_val(results, f"epoch {epoch + 1}", stress)
+            row.update(val_cells(results, stress))
             score = selection_score(results, stress)
             if score > best_score:
                 best_score, best_epoch = score, epoch + 1
                 save_weights(model, best_path, {**meta, "epoch": str(best_epoch)})
                 print(f"  new best (leaderboard-style score {100 * score:.2f}) -> {best_path}", flush=True)
+        history.append(row)
+        write_history(history_path, columns, history)
         torch.save({"model": model.state_dict(), "opt": opt.state_dict(), "sched": sched.state_dict(),
                     "epoch": epoch + 1, "best_score": best_score, "best_epoch": best_epoch},
                    str(resume_path))

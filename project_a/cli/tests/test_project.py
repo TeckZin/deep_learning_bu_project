@@ -10,6 +10,7 @@
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import csv
 import tempfile
 import unittest
 
@@ -179,6 +180,10 @@ class PipelineTests(unittest.TestCase):
             with self.assertRaises(SystemExit):                    # someone else's settings, same folder
                 train.main(run_args + ["--lr", "1e-4", "--resume", str(tmp / "run" / "refiner.resume.pt")])
             train.main(run_args + ["--epochs", "1", "--resume", str(tmp / "run" / "refiner.resume.pt")])
+            with open(tmp / "run" / "history.csv", newline="") as fh:    # 0 = before training, 1 = epoch 1
+                history = list(csv.DictReader(fh))
+            self.assertEqual([r["epoch"] for r in history], ["0", "1"])
+            self.assertTrue(history[1]["train_y2"] and history[1]["val_loss_k4"] and history[0]["val_quality_k0"])
             samples = tmp / "samples" / "nested"
             samples.mkdir(parents=True)
             for i in (0, 1):

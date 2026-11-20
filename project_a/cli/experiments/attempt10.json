@@ -1,5 +1,5 @@
 {
-  "comment": "attempt10 (docs/experiments/attempt10_design.md): attempt8 training recipe on the attempt10 architecture (encoder core + 2D RoPE, image CNN inside the loop, spatial memory z). Per-fold changes go in fold_overrides, e.g. {\"2\": {\"lr\": 1e-4}}.",
+  "comment": "attempt10 (docs/experiments/attempt10_design.md): attempt8 training recipe on the attempt10 architecture (encoder core + 2D RoPE, image CNN inside the loop, spatial memory z), with stress and y0 augmentation off. Flips and 90-degree rotations (augment_tiles) are always on. Per-fold changes go in fold_overrides, e.g. {\"2\": {\"lr\": 1e-4}}.",
   "run": "attempt10",
   "arch": "attempt10",
   "h0_scheme": "oof",
@@ -13,8 +13,8 @@
   "pos_weight": 1.0,
   "edge_weight": 4.0,
   "cldice_weight": 0.2,
-  "stress_aug": 0.3,
-  "y0_aug": 0.5,
+  "stress_aug": 0.0,
+  "y0_aug": 0.0,
   "detach_y": true,
   "val_every": 5,
   "fold_overrides": {}

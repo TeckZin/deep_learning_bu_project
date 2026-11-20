@@ -2,7 +2,7 @@
 
 Status: **implemented, not trained** (2026-11-20). The architecture is the `attempt10` preset in
 `project_a/cli/submission/config.py` (class `SpatialRefiner` in `submission/model.py`); the training recipe is
-`experiments/attempt10.json` (attempt8's recipe with `arch: attempt10`). The `attempt7` and `attempt6` presets
+`experiments/attempt10.json` (attempt8's recipe with `arch: attempt10`, and `stress_aug` and `y0_aug` set to 0; flips and rotations stay on). The `attempt7` and `attempt6` presets
 and their weights do not change.
 
 Goals: win back the edges (attempt7 BIoU 4.78) by giving the loop the full-resolution image, and make

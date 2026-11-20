@@ -8,7 +8,8 @@ import numpy as np
 from PIL import Image
 import torch
 
-from data import load_image
+from data import load_image, load_mask
+from losses import seg_loss
 from metrics import Counts, image_counts, leaderboard_score, summarize
 
 VAL_KS = (0, 1, 2, 4)
@@ -24,10 +25,12 @@ def _counts(logits, labels):
 
 
 @torch.no_grad()
-def validate(model, base, rows, device, ks=VAL_KS):
+def validate(model, base, rows, device, ks=VAL_KS, loss_args=None):
     """{K: summary} for the refiner on top of base, fp32, full tiles, no crop offset (like inference).
 
     model=None scores only K=0 (the frozen encoder + H0 alone).
+    loss_args: (pos_weight, dice_weight, edge_weight, cldice_weight) as in training. When given, each
+    summary also has "loss": the training loss of y_K averaged over tiles (reuses the outputs, so cheap).
     """
     ks = (0,) if model is None else tuple(ks)
     was_training = model.training if model is not None else False
@@ -35,6 +38,7 @@ def validate(model, base, rows, device, ks=VAL_KS):
         model.eval()
         model.pos_offset = None
     totals = {k: Counts() for k in ks}
+    losses = {k: 0.0 for k in ks}
     kmax = max(ks)
     for row in rows:
         image = load_image(row["image"])[None].to(device)
@@ -49,9 +53,17 @@ def validate(model, base, rows, device, ks=VAL_KS):
                     outputs[t] = y
         for k in ks:
             totals[k] = totals[k] + _counts(outputs[k], labels)
+        if loss_args is not None:
+            target, valid = (t[None].to(device) for t in load_mask(row["label"]))   # [1, 1, H, W]
+            for k in ks:
+                losses[k] += seg_loss(outputs[k], target, valid, *loss_args).item()
     if model is not None:
         model.train(was_training)
-    return {k: summarize(c) for k, c in totals.items()}
+    results = {k: summarize(c) for k, c in totals.items()}
+    if loss_args is not None:
+        for k in ks:
+            results[k]["loss"] = losses[k] / max(len(rows), 1)
+    return results
 
 
 @torch.no_grad()
@@ -93,3 +105,6 @@ def print_val(results, label, stress=None):
     print(f"  val {label} quality  {line}{extra}  | K={kmax} IoU {100 * results[kmax]['road_iou']:.2f}"
           f"  clDice {100 * results[kmax]['cldice']:.2f}  BIoU {100 * results[kmax]['boundary_iou']:.2f}",
           flush=True)
+    if "loss" in results[kmax]:
+        print("  val loss by step:    " + " | ".join(f"y{k} {results[k]['loss']:.4f}" for k in sorted(results)),
+              flush=True)
