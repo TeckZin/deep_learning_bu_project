@@ -18,26 +18,70 @@ mode="cross"
     memory self-attends and reads the grid (nn.TransformerDecoderLayer, num_layers//2 times),
     then the grid reads the memory back (nn.MultiheadAttention + feed-forward).
     Grid tokens never attend to each other directly, only through the memory.
+
+pos="rope" (or "both", mode="self" only)
+    Same encoder, but each layer is a RopeEncoderLayer: Q and K are rotated by the patch's
+    (row, col) before attention, so scores depend on relative position. forward() then
+    takes rope = (cos, sin) from pos.rope2d. attempt10 uses this with 6 layers.
 """
 import torch
 from torch import nn
+from torch.nn import functional as F
+
+from .pos import apply_rope
+
+
+class RopeEncoderLayer(nn.Module):
+    """Pre-norm encoder layer with 2D RoPE on Q and K; same parameters as nn.TransformerEncoderLayer.
+
+    Written by hand because nn.TransformerEncoderLayer does not expose Q and K.
+        x = x + Attn(LN(x))      every token attends to every token (fused scaled_dot_product_attention)
+        x = x + FFN(LN(x))       per token, d -> dim_ff -> d, GELU
+    """
+
+    def __init__(self, d, nhead, dim_ff, dropout) -> None:
+        super().__init__()
+        self.nhead = nhead
+        self.attn_dropout = dropout
+        self.norm1 = nn.LayerNorm(d)
+        self.qkv = nn.Linear(d, 3 * d)
+        self.out = nn.Linear(d, d)
+        self.norm2 = nn.LayerNorm(d)
+        self.ff = nn.Sequential(nn.Linear(d, dim_ff), nn.GELU(), nn.Dropout(dropout), nn.Linear(dim_ff, d))
+        self.drop = nn.Dropout(dropout)
+
+    def forward(self, x, rope):
+        B, N, d = x.shape
+        q, k, v = self.qkv(self.norm1(x)).view(B, N, 3, self.nhead, d // self.nhead).permute(2, 0, 3, 1, 4)
+        q, k = apply_rope(q, *rope), apply_rope(k, *rope)                  # [B, heads, N, head_dim]
+        a = F.scaled_dot_product_attention(q, k, v, dropout_p=self.attn_dropout if self.training else 0.0)
+        x = x + self.drop(self.out(a.transpose(1, 2).reshape(B, N, d)))
+        return x + self.drop(self.ff(self.norm2(x)))
 
 
 class Core(nn.Module):
     def __init__(self, d=256, nhead=8, num_layers=4, dim_ff=None, dropout=0.05,
-                 mode="self", n_mem=None) -> None:
+                 mode="self", n_mem=None, pos="add") -> None:
         super().__init__()
         if mode not in ("self", "cross"):
             raise ValueError("mode must be 'self' or 'cross'")
+        if pos not in ("add", "rope", "both"):
+            raise ValueError("pos must be 'add', 'rope' or 'both'")
+        if pos != "add" and mode != "self":
+            raise ValueError("RoPE (core.pos='rope'/'both') needs mode='self'")
         if mode == "cross" and not n_mem:
             raise ValueError("mode='cross' needs n_mem (number of memory tokens at the end)")
         self.mode = mode
         self.n_mem = n_mem
+        self.rope = pos != "add"           # forward() then needs rope = (cos, sin)
         dim_ff = dim_ff or 4 * d
         common = dict(d_model=d, nhead=nhead, dim_feedforward=dim_ff, dropout=dropout,
                       activation="gelu", batch_first=True, norm_first=True)
 
-        if mode == "self":
+        if self.rope:
+            self.layers = nn.ModuleList(
+                [RopeEncoderLayer(d, nhead, dim_ff, dropout) for _ in range(num_layers)])
+        elif mode == "self":
             # num_layers independent layers inside ONE core (a fixed multi-layer core
             # is allowed); the whole stack is reused at every step.
             self.encoder = nn.TransformerEncoder(
@@ -59,7 +103,11 @@ class Core(nn.Module):
         # Final norm keeps the carried state bounded however many steps are unrolled.
         self.norm = nn.LayerNorm(d)
 
-    def forward(self, tokens):
+    def forward(self, tokens, rope=None):
+        if self.rope:
+            for layer in self.layers:
+                tokens = layer(tokens, rope)
+            return self.norm(tokens)
         if self.mode == "self":
             return self.norm(self.encoder(tokens))
 

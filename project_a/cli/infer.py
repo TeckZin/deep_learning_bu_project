@@ -6,7 +6,8 @@
     python infer.py --input IMAGES --output OUT --stage refine     # stage 2 only (checks stage 1 is complete)
 
 Stage 1 (encode): the frozen encoder + H0 run on every image and save
-    OUT_intermediate/<id>.safetensors   features f [1, C, H/16, W/16] and initial logits y0 [1, 1, H, W]
+    OUT_intermediate/<id>.safetensors   features f [1, C, H/16, W/16], initial logits y0 [1, 1, H, W]
+                                        and the raw image [1, 3, H, W] uint8 (TA: the image is a representation)
     OUT_intermediate/index.json         ids and image sizes; written last, so it marks a finished stage 1
 Stage 2 (refine): the refiner reads each intermediate file, runs K = 1..max(--steps) rounds and writes
     OUT/k<K>/<id>.png                   uint8, same H x W as the input, 1 = road, 0 = non-road
@@ -20,7 +21,7 @@ The encoder is the public frozen DINOv2 from torch.hub; download it once with in
     python -c "import torch; torch.hub.load('facebookresearch/dinov2', 'dinov2_vits14', trust_repo=True)"
 
 Memory: one image at a time, so RAM use does not grow with the number of images.
-Disk: stage 1 stores ~10 MB per 1024x1024 image (fp32 ViT-S/14 features + logits).
+Disk: stage 1 stores ~13 MB per 1024x1024 image (fp32 ViT-S/14 features + logits, uint8 image).
 """
 import argparse
 import json
@@ -33,6 +34,8 @@ from safetensors import safe_open
 from safetensors.torch import load_file, save_file
 
 from frozen_encoder import FrozenEncoder, H0Head, build_encoder
+from submission.config import config_from_json
+from submission.image import pack_image, packed_channels
 from submission.model import load_refiner
 
 HERE = Path(__file__).resolve().parent
@@ -89,8 +92,9 @@ def encode(items, weights, work, device):
             raise ValueError(f"{image_id}: bad initial logits {tuple(y0.shape)}")
         dest = work / f"{image_id}.safetensors"
         dest.parent.mkdir(parents=True, exist_ok=True)
-        save_file({"features": features.float().contiguous().cpu(), "y0": y0.float().contiguous().cpu()},
-                  str(dest))
+        raw = (image * 255).round().to(torch.uint8)
+        save_file({"features": features.float().contiguous().cpu(), "y0": y0.float().contiguous().cpu(),
+                   "image": raw.contiguous().cpu()}, str(dest))
         index["images"][image_id] = list(image.shape[-2:])
         print(f"[encode {i + 1}/{len(items)}] {image_id}", flush=True)
     (work / "index.json").write_text(json.dumps(index, indent=1))       # last: marks stage 1 complete
@@ -110,12 +114,17 @@ def check_intermediate(work, items):
 @torch.no_grad()
 def refine(index, weights, work, output, steps, device, save_prob=False, ids=None):
     """Stage 2: K rounds of the refiner on each intermediate file -> output/k<K>/<id>.png."""
-    model = load_refiner(weights, index["feature_channels"], device, prefix="refiner.").eval()
+    cfg = config_from_json(bundle_metadata(weights)["refiner_cfg"])
+    channels = index["feature_channels"] + packed_channels(cfg)         # + the image packed into f
+    model = load_refiner(weights, channels, device, prefix="refiner.").eval()
     kmax = max(steps)
     ids = ids or sorted(index["images"])
     for n, image_id in enumerate(ids):
         data = load_file(str(work / f"{image_id}.safetensors"), device=str(device))
         features, y = data["features"], data["y0"]
+        if cfg.image.use:                   # the refiner sees the image inside the loop (never after it)
+            assert "image" in data, f"{image_id}: no raw image in the intermediate file; rerun --stage encode"
+            features = pack_image(features, data["image"].float() / 255, cfg.image.stride)
         size = tuple(index["images"][image_id])
         outputs = {0: y}
         if kmax > 0:

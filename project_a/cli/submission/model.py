@@ -6,7 +6,12 @@ Everything the refiner needs is inside submission/ (shipped as one package):
     memory.py        grid -> z_0 (memory initialization)              doc stage 6
     core.py          the ONE shared transformer, model.core           doc stages 9-11
     output_heads.py  grid tokens -> full-resolution correction dy     doc stages 12-13
-    pos.py           2D position code
+    pos.py           2D position codes (additive sinusoidal, RoPE)
+    image.py         the image packed into f, and the image CNN used inside the loop
+
+Two refiner classes, picked by memory.kind:
+    "slots"    Refiner          z = memory tokens next to the grid in the core (attempt6, attempt7)
+    "spatial"  SpatialRefiner   z = maps parallel to y, image inside the loop  (attempt10)
 
     state = model.initialize(features, y_0)                # z_0 = I(f, y_0)
     repeat K times (the caller owns the loop, the model never sees K):
@@ -26,16 +31,22 @@ Rules required by predict.py / the tests:
 import torch
 from torch import nn
 
+from torch.nn import functional as F
+
 from .config import config_from_metadata, get_config
 from .core import Core
-from .memory import MEMORIES
-from .output_heads import HEADS
-from .tokenizers import TOKENIZERS
+from .image import ImageCNN, packed_channels, unpack_image
+from .memory import MEMORIES, SpatialMemory
+from .output_heads import HEADS, SpatialHead
+from .pos import rope2d
+from .tokenizers import TOKENIZERS, SplitTokenizer
 
 
 class Refiner(nn.Module):
     def __init__(self, c_in, cfg) -> None:
         super().__init__()
+        if cfg.image.use or cfg.core.pos != "add":
+            raise ValueError("The slots refiner supports neither image.use nor RoPE; use memory.kind=spatial")
         self.cfg = cfg
         self.patch = cfg.patch
         c = cfg.core
@@ -62,12 +73,80 @@ class Refiner(nn.Module):
         return next_state, previous_logits + dy
 
 
+class SpatialRefiner(nn.Module):
+    """attempt10: encoder core over fused (x, y, z) tokens, the image inside the loop, z as maps.
+
+        z_0 = Memory(x, y_0)                                  # [B, Cz, H/s, W/s]
+        one step:
+            x, image  = unpack(f)                             # image packed into f (image.py)
+            E         = ImageCNN(image)                       # full-res edge features
+            tokens    = Tokenize(x, E, y_t, z_t)              # one fused token per patch
+            tokens    = core(tokens, rope)                    # ONE core call
+            dy, z_t+1 = Head(tokens, y_t, z_t, E)
+            y_t+1     = y_t + dy
+
+    c_in counts every channel of f, packed image included (base.feature_channels).
+    """
+
+    def __init__(self, c_in, cfg) -> None:
+        super().__init__()
+        if cfg.tokenizer.kind != "split" or cfg.head.kind != "spatial":
+            raise ValueError("memory.kind=spatial needs tokenizer.kind=split and head.kind=spatial")
+        c_x = c_in - packed_channels(cfg)
+        if c_x <= 0:
+            raise ValueError(f"{c_in} feature channels, but image.use packs {packed_channels(cfg)} image "
+                             "channels into f: wrap the base in submission.image.ImagePackedBase")
+        self.cfg = cfg
+        self.patch = cfg.patch
+        c, m = cfg.core, cfg.memory
+        c_edges = cfg.image.hidden if cfg.image.use else 0
+        # Attribute names are the checkpoint key prefixes: keep them.
+        self.image = ImageCNN(cfg.image) if cfg.image.use else None
+        self.tok = SplitTokenizer(c_x, c_edges, m.channels, m.stride, cfg.d, cfg.patch, cfg.tokenizer,
+                                  add_pos=c.pos in ("add", "both"))
+        self.init = SpatialMemory(c_x, m)
+        self.core = Core(cfg.d, c.heads, c.layers, dim_ff=c.ff_mult * cfg.d, dropout=c.dropout,
+                         mode=c.mode, pos=c.pos)
+        self.head = SpatialHead(cfg.d, cfg.patch, cfg.head, c_edges, m.channels)
+        self.pos_offset = None
+
+    def split_features(self, features):
+        """Packed f -> (frozen features x, normalized image or None)."""
+        if self.image is None:
+            return features, None
+        return unpack_image(features, self.cfg.image.stride)
+
+    def initialize(self, features, initial_logits):
+        """z_0 = Memory(x, y_0). Called once before step 1; does not call the core."""
+        x, _ = self.split_features(features)
+        return self.init(x, initial_logits)
+
+    def step(self, features, state, previous_logits):
+        """One refinement step: (z_t, y_t) -> (z_t+1, y_t+1)."""
+        x, image = self.split_features(features)
+        edges = None
+        if image is not None:
+            if image.shape[-2:] != previous_logits.shape[-2:]:          # image not a multiple of 16
+                image = F.interpolate(image, size=previous_logits.shape[-2:], mode="bilinear",
+                                      align_corners=False)
+            edges = self.image(image)                                    # CNN inside the loop
+        tokens, h, w = self.tok(x, edges, previous_logits, state, self.pos_offset)
+        rope = None
+        if self.core.rope:
+            rope = rope2d(h, w, self.cfg.d // self.cfg.core.heads, tokens.device, self.pos_offset)
+        tokens = self.core(tokens, rope)                                 # ONE core call
+        dy, next_state = self.head(tokens, h, w, previous_logits, state, edges)
+        return next_state, previous_logits + dy
+
+
 def build_refiner(feature_channels, cfg=None):
     """Entry point used by predict.py, infer.py, train.py and make_demo.py.
 
     cfg=None -> the ACTIVE preset in submission/config.py (the staff runner passes nothing).
     """
-    return Refiner(c_in=feature_channels, cfg=cfg or get_config())
+    cfg = cfg or get_config()
+    model_class = SpatialRefiner if cfg.memory.kind == "spatial" else Refiner
+    return model_class(c_in=feature_channels, cfg=cfg)
 
 
 def load_refiner(path, feature_channels, device="cpu", prefix=""):
@@ -94,8 +173,9 @@ if __name__ == "__main__":
     from .config import PRESETS
 
     for name, cfg in PRESETS.items():
-        model = build_refiner(5, cfg).eval()
-        f = torch.randn(2, 5, 4, 5)
+        extra = packed_channels(cfg)                       # image channels packed into f, if any
+        model = build_refiner(5 + extra, cfg).eval()
+        f = torch.randn(2, 5 + extra, 4, 5)
         y0 = torch.randn(2, 1, 64, 80)
         with torch.no_grad():
             z, y, ys = model.initialize(f, y0), y0, []
@@ -105,7 +185,7 @@ if __name__ == "__main__":
             z2, y2 = model.initialize(f, y0), y0
             for _ in range(2):
                 z2, y2 = model.step(f, z2, y2)
-        big = build_refiner(384, cfg)
+        big = build_refiner(384 + extra, cfg)
         print(f"{name:10s} y4 {tuple(ys[-1].shape)}  prefix K2==K4 {torch.allclose(y2, ys[1], atol=1e-6)}"
               f"  changes y {not torch.equal(ys[0], y0)}"
               f"  params@384 {sum(p.numel() for p in big.parameters()):,}"

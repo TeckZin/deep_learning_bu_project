@@ -17,24 +17,27 @@ import json
 
 @dataclass(frozen=True)
 class TokenizerConfig:
-    """Doc stages 5, 7, 8: patchify features f and answer y_t, fuse them into one token per patch."""
-    kind: str = "fused"
-    fuse: str = "sum"             # "sum" | "concat" (concat -> Linear(2d, d))
-    feat_norm: bool = True        # LayerNorm over the frozen feature channels first (attempt7)
-    uncertainty: bool = True      # add a 4p(1-p) channel to the answer patches (attempt7)
+    """Doc stages 5, 7, 8: patchify features f and answer y_t (and memory z_t), fuse into one token per patch."""
+    kind: str = "fused"           # "fused" (f, y) | "split" (x, y, z each tokenized, then fused; attempt10)
+    fuse: str = "sum"             # fused: "sum" | "concat";  split: "concat" | "mlp"
+    feat_norm: bool = True        # fused only: LayerNorm over the frozen feature channels first (attempt7)
+    uncertainty: bool = True      # fused only: add a 4p(1-p) channel to the answer patches (attempt7)
 
 
 @dataclass(frozen=True)
 class MemoryConfig:
     """Doc stage 6: how z_0 is made and what is carried between steps."""
-    kind: str = "slots"           # learned memory slots that read the grid once
-    nz: int = 32
+    kind: str = "slots"           # "slots": nz learned tokens | "spatial": Cz maps at H/stride (attempt10)
+    nz: int = 32                  # slots only
+    channels: int = 16            # spatial only: Cz
+    stride: int = 4               # spatial only: z is [B, Cz, H/stride, W/stride]
 
 
 @dataclass(frozen=True)
 class CoreConfig:
     """Doc stages 9-11: the ONE shared transformer (QKV, attention, FFN, norms, layers)."""
     mode: str = "self"            # "self" (all tokens attend) | "cross" (grid <-> memory only)
+    pos: str = "add"              # "add" (sinusoidal on tokens) | "rope" (2D RoPE on Q, K) | "both"
     layers: int = 4
     heads: int = 8
     ff_mult: int = 4
@@ -43,12 +46,21 @@ class CoreConfig:
 
 @dataclass(frozen=True)
 class HeadConfig:
-    """Doc stages 12-13: grid tokens -> full-resolution correction dy."""
-    kind: str = "pixelshuffle"
+    """Doc stages 12-13: grid tokens -> full-resolution correction dy (and z_t+1 for spatial memory)."""
+    kind: str = "pixelshuffle"    # "pixelshuffle" | "spatial" (also sees the image, writes z; attempt10)
     hidden: int = 64
     dilations: tuple = (1, 2, 4, 8, 1)
     ctx: int = 16                 # core-output channels fed to the full-res conv stack (0 = off)
     gate: bool = True             # dy = (coarse + r) * sigmoid(g + 2)  (attempt7)
+
+
+@dataclass(frozen=True)
+class ImageConfig:
+    """The full-resolution image inside the loop (TA ruling 2026-11-18), packed into f (submission/image.py)."""
+    use: bool = False
+    stride: int = 16              # packing stride = the feature grid stride (H/16)
+    hidden: int = 24              # channels of the full-resolution image CNN
+    layers: int = 3
 
 
 @dataclass(frozen=True)
@@ -59,6 +71,7 @@ class RefinerConfig:
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     core: CoreConfig = field(default_factory=CoreConfig)
     head: HeadConfig = field(default_factory=HeadConfig)
+    image: ImageConfig = field(default_factory=ImageConfig)
 
 
 PRESETS = {
@@ -68,6 +81,14 @@ PRESETS = {
     "attempt6": RefinerConfig(
         tokenizer=TokenizerConfig(feat_norm=False, uncertainty=False),
         head=HeadConfig(ctx=0, gate=False)),
+    # attempt10 (docs/experiments/attempt10_design.md): 6-layer encoder core with 2D RoPE over fused
+    # (x, y, z) tokens, the image in a CNN inside the loop, and z as 16 maps at H/4.
+    "attempt10": RefinerConfig(
+        tokenizer=TokenizerConfig(kind="split", fuse="concat"),
+        memory=MemoryConfig(kind="spatial", channels=16, stride=4),
+        core=CoreConfig(pos="rope", layers=6, heads=8, ff_mult=4),
+        head=HeadConfig(kind="spatial"),
+        image=ImageConfig(use=True)),
 }
 
 # The preset build_refiner() uses when no config is given (staff predict.py, and
@@ -119,7 +140,7 @@ def config_to_json(cfg):
 def config_from_json(text):
     raw = json.loads(text)
     sections = {"tokenizer": TokenizerConfig, "memory": MemoryConfig, "core": CoreConfig,
-                "head": HeadConfig}
+                "head": HeadConfig, "image": ImageConfig}
     kwargs = {}
     for key, value in raw.items():
         if key in sections:

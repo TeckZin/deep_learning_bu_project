@@ -50,6 +50,7 @@ from evaluation import print_val, selection_score, validate
 from losses import seg_loss
 from splits import DEFAULT_FOLDS, default_data_root, fold_plan, read_folds
 from submission.config import ACTIVE, apply_overrides, config_to_json, get_config
+from submission.image import ImagePackedBase
 from submission.model import build_refiner
 
 CORE_LIMIT, TOTAL_LIMIT = 5_000_000, 10_000_000      # proposed caps from the handout
@@ -258,6 +259,9 @@ def main(argv=None):
         val_rows = subset_rows(plan["val"], 1.0, args.val_max_images, args.seed)
         print(f"fold {args.val_fold} ({args.h0_scheme}): y0 for training from "
               f"{', '.join('h0_' + n for n in train_names)}; validation/inference H0 {eval_h0_path.name}")
+    if cfg.image.use:       # the refiner sees the image inside the loop: pack it into f
+        train_base = ImagePackedBase(train_base, cfg.image.stride)
+        eval_base = ImagePackedBase(eval_base, cfg.image.stride)
     for b in (train_base, eval_base):
         b.requires_grad_(False)
     print(f"{len(dataset)} training images, {len(val_rows)} validation images")

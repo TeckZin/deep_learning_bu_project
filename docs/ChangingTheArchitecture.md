@@ -60,9 +60,10 @@ loop it is now fine. The handout's rule still applies: no **independent** CNN se
 the recurrent state in charge of the decision and show it with the runner's ablations
 (`predict.py --ablation reset-state` / `no-mask-feedback` should still change the output a lot).
 
-To get the image into `step(f, z, y)`: store it raw in the intermediate folder (`infer.py` stage 1) and
-pack it into `f` (pixel-unshuffled RGB channels next to the encoder features); the module that uses it
-(tokenizer or head) unpacks it.
+To get the image into `step(f, z, y)` (built for attempt10, `submission/image.py`): set `image.use=true`.
+`train.py` then wraps the frozen base in `ImagePackedBase`, which packs the pixel-unshuffled RGB channels
+next to the encoder features; `infer.py` stores the raw image in the intermediate folder (stage 1) and packs
+it in stage 2. The refiner unpacks it with `unpack_image`. Only `SpatialRefiner` (memory.kind=spatial) uses it.
 
 ## Gotcha: changing H0 without changing the encoder
 
