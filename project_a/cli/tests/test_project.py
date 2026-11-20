@@ -184,6 +184,8 @@ class PipelineTests(unittest.TestCase):
                 history = list(csv.DictReader(fh))
             self.assertEqual([r["epoch"] for r in history], ["0", "1"])
             self.assertTrue(history[1]["train_y2"] and history[1]["val_loss_k4"] and history[0]["val_quality_k0"])
+            for col in ("grad_core", "clip_rate", "diag_dy_t8", "diag_loss_t0", "diag_quality_k4_reset"):
+                self.assertTrue(history[1][col], col)
             samples = tmp / "samples" / "nested"
             samples.mkdir(parents=True)
             for i in (0, 1):

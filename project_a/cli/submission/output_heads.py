@@ -95,6 +95,7 @@ class SpatialHead(nn.Module):
         nn.init.zeros_(self.dy_out.weight)                                     # r = 0, gate ~ 0.88 at init
         nn.init.zeros_(self.dy_out.bias)
         self.z_out = nn.Conv2d(cfg.hidden + cz, 2 * cz, 3, padding=1)          # u, c
+        self.gate_mean = None          # mean u of the last call, read by evaluation.loop_diagnostics
 
     def forward(self, tokens, h, w, logits, z, edges=None):
         H, W = logits.shape[-2:]
@@ -119,6 +120,7 @@ class SpatialHead(nn.Module):
         pooled = F.adaptive_avg_pool2d(feats, z.shape[-2:])                  # to z's resolution
         u, c = self.z_out(torch.cat([pooled, z.to(pooled.dtype)], dim=1)).chunk(2, dim=1)
         u = torch.sigmoid(u)
+        self.gate_mean = u.detach().float().mean()
         return dy, (1 - u) * z + u * torch.tanh(c)
 
 
