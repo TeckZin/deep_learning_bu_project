@@ -8,13 +8,13 @@ Input and output are the same sequence model.py builds:
     tokens = [grid tokens (N), memory tokens (n_mem)]      [B, N + n_mem, d]
 (one fused image+answer token per patch, then the memory z_t).
 
-mode="self"  (default, recommended)
+mode="self"
     nn.TransformerEncoder: every token attends to every token, so each patch sees
     its neighbours, far-away road pieces and the memory directly.
     Cost per layer ~ (N + n_mem)^2: a full 1024x1024 tile at patch 16 is
     4096 + 32 tokens, which fits easily on one L40S with PyTorch's fused attention.
 
-mode="cross" (cheaper, weaker)
+mode="cross"
     memory self-attends and reads the grid (nn.TransformerDecoderLayer, num_layers//2 times),
     then the grid reads the memory back (nn.MultiheadAttention + feed-forward).
     Grid tokens never attend to each other directly, only through the memory.

@@ -3,13 +3,13 @@
 Goal: keep attempt7's connectivity gain (clDice 71.2) and win back the edges.
 
 ## Setup
-- [ ] Commit attempt7 and tag it: `git add -A && git commit -m "attempt7" && git tag attempt7`
-- [ ] Create the job script:
-      sed -e 's/attempt7/attempt8/g' -e 's/--cldice-weight 0.5/--cldice-weight 0.2/' \
-        -e 's/--val-every 0/--val-every 5/' train_job_attempt7.sh > train_job_attempt8.sh
-- [ ] Check the script: `grep -n "attempt8\|cldice\|val-every" train_job_attempt8.sh`
-- [ ] Submit: `qsub train_job_attempt8.sh`
-- [ ] Watch: `tail -F logs/attempt8.*.log`
+- [x] Commit attempt7 and tag it (tag `attempt7` = merge of PR #28)
+- [x] Experiment file: `project_a/cli/experiments/attempt8.json` (attempt7 recipe, the two changes below)
+- [ ] Folds once (if `splits/folds.csv` is not committed yet): `python splits.py make`
+- [ ] Submit fold 0 (H0 heads, then refiner): `bash jobs/cv.sh attempt8 0`
+- [ ] Watch: `tail -F logs/attempt8_f0.*.log` (outputs in `weights/<login>-attempt8/fold0/`)
+- Note: attempt7's numbers were on val_small (100 images) with halves; attempt8 runs on CV fold 0
+  with out-of-fold y0, so compare against `experiments/attempt7.json` run on the same fold.
 
 ## Changes vs attempt7 (only these two)
 - [ ] `--cldice-weight 0.5` -> `0.2`

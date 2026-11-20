@@ -6,6 +6,11 @@
 data/
 smoke_outputs/
 predictions/
+# weights and logs without a trailing slash, so the symlinks to the shared runs/ (SCC) match too
+weights
+dist/
+logs
+val_fold*/
 
 # Checkpoints
 *.safetensors
