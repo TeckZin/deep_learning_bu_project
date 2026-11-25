@@ -1,6 +1,8 @@
 # attempt10: results
 
 Architecture and decisions: `attempt10_design.md`. Per-epoch numbers: `attempt10_fold0_history.csv`.
+Training curves (charts of that file): [`attempt10_curves/`](attempt10_curves/README.md), made with
+`python curves.py --history <history.csv> --out ../../docs/experiments/attempt10_curves --title "attempt10, fold 0"`.
 
 ## Run
 
