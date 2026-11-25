@@ -145,6 +145,37 @@ What the panels show:
 - Uses z: resetting z adds false road on bare ground and construction sites (urban/3868: 57.2 -> 39.7).
 - Predicted roads show small holes on a regular grid, which looks like a 16-pixel patch artifact.
 
+## Submission
+
+attempt10 is the active preset (`ACTIVE = "attempt10"`) and the current submission.
+
+| | |
+|---|---|
+| Bundle (SCC) | `submissions/attempt10_fold0.zip` and `submissions/attempt10_fold0/` in the team space |
+| Contents | `infer.py`, `frozen_encoder.py`, `submission/*.py`, one weights file (H0 + refiner), README |
+| Encoder | DINOv2 ViT-S/14 from torch.hub, frozen |
+| H0 | `weights/h0/dinov2_vits14_oof/fold0/h0_all.safetensors` (trained on folds 1-4) |
+| Refiner | `weights/fdzeolla-attempt10/fold0/refiner_best.safetensors` (epoch 40, folds 1-4) |
+| Leaderboard entry | `OUT/k4/` from `python infer.py --input IMAGES --output OUT` (`--input` may also be one image file) |
+| Environment | `requirements.txt`, pinned to the SCC environment: Python 3.12, numpy 2.3.5, Pillow 12.3.0, safetensors 0.5.3, torch 2.6.0 |
+| Encoder download | DINOv2 from torch.hub on first run, as in earlier submissions (one-line command in the bundle README) |
+| Expected score (fold 0) | 59.66 leaderboard-style (K=4 59.86, stress K=4 59.18) |
+
+Built and checked by job 8938187 (the first build, job 8937525, is kept as `submissions/attempt10_fold0_v1`;
+it had unpinned requirements and no single-image input):
+
+    python export_submission.py --refiner weights/fdzeolla-attempt10/fold0/refiner_best.safetensors \
+        --out /projectnb/ec523kb/projects/CowenZeollaZinTan/submissions/attempt10_fold0 --zip \
+        --check runs/eval/export_check_images
+
+`--check` unzipped a copy into an empty folder and ran `infer.py` on one urban and one rural validation
+image, then on a single image file; both wrote masks for K = 0, 1, 2, 4, 6, 8.
+
+- The bundle runs the trained model with the image CNN on: `infer.py` rebuilds it from the config stored
+  in the weights and packs the image into f.
+- Fold 0 was held out, so H0 and the refiner saw 4 of the 5 folds. A final bundle could retrain both on all
+  folds (after the 80-epoch run settles the training length) and be exported the same way.
+
 ## Not measured yet
 - How much of the +2.2 over the control comes from size alone (e.g. attempt7 with `--set core.layers=6`).
 - Other folds (variance). The stress set is measured above.

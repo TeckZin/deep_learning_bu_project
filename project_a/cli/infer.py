@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Leaderboard inference: a folder of RGB images -> one folder of road masks per refinement round K.
+"""Leaderboard inference: a folder of RGB images (or one image) -> one folder of road masks per refinement round K.
 
     python infer.py --input IMAGES --output OUT                    # both stages
+    python infer.py --input IMAGES/urban/001.png --output OUT      # a single image (id = file name, "001")
     python infer.py --input IMAGES --output OUT --stage encode     # stage 1 only
     python infer.py --input IMAGES --output OUT --stage refine     # stage 2 only (checks stage 1 is complete)
 
@@ -13,7 +14,8 @@ Stage 2 (refine): the refiner reads each intermediate file, runs K = 1..max(--st
     OUT/k<K>/<id>.png                   uint8, same H x W as the input, 1 = road, 0 = non-road
                                         (k0 = H0 alone, before any refinement)
     OUT/k<K>_prob/<id>.npy              float32 road probability (only with --save-prob)
-Image ids are the input path relative to --input, without the extension (sub-folders kept).
+Image ids are the input path relative to --input, without the extension (sub-folders kept);
+for a single image file, the id is its file name without the extension.
 
 Weights: ONE file (default weights/submission.safetensors next to this script) holding the
 H0 head ("h0.*") and the refiner ("refiner.*"), with the architecture in its metadata.
@@ -43,7 +45,12 @@ IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".tif", ".tiff")
 
 
 def list_images(folder):
+    """[(path, id)] for a folder of images (searched recursively) or for ONE image file (id = file stem)."""
     folder = Path(folder)
+    if folder.is_file():
+        if folder.suffix.lower() not in IMAGE_SUFFIXES:
+            raise SystemExit(f"{folder} is not an image ({', '.join(IMAGE_SUFFIXES)})")
+        return [(folder, folder.stem)]
     files = sorted(f for f in folder.rglob("*") if f.is_file() and f.suffix.lower() in IMAGE_SUFFIXES)
     if not files:
         raise SystemExit(f"No images ({', '.join(IMAGE_SUFFIXES)}) under {folder}")
@@ -151,7 +158,7 @@ def refine(index, weights, work, output, steps, device, save_prob=False, ids=Non
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--input", type=Path, help="Folder of RGB images (searched recursively)")
+    p.add_argument("--input", type=Path, help="Folder of RGB images (searched recursively), or one image file")
     p.add_argument("--output", type=Path, required=True)
     p.add_argument("--weights", type=Path, default=HERE / "weights" / "submission.safetensors")
     p.add_argument("--steps", default="0,1,2,4,6,8", help="Comma list of K to save (one run to the max K)")

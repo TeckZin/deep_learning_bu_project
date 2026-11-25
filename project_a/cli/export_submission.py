@@ -28,7 +28,14 @@ from submission.config import ACTIVE, config_to_json, get_config
 
 HERE = Path(__file__).resolve().parent
 CODE = ["infer.py", "frozen_encoder.py"]
-REQUIREMENTS = "numpy\nPillow\ntorch\nsafetensors\n"
+# Pinned to the environment the bundle was trained and checked in (BU SCC, Python 3.12.4; torch is the
+# CUDA 12.4 build there, torch==2.6.0+cu124 from the PyTorch index; any torch 2.6.0 build runs the code).
+REQUIREMENTS = """# Python 3.12
+numpy==2.3.5
+Pillow==12.3.0
+safetensors==0.5.3
+torch==2.6.0
+"""
 
 README = """# Road segmentation with a recurrent refiner: inference
 
@@ -42,6 +49,8 @@ on a machine without internet, download it once beforehand:
 Run (GPU used automatically if available):
 
     python infer.py --input IMAGES --output OUT
+
+--input may also be a single image file (its masks are named after the file).
 
 or in two stages (stage 2 checks stage 1 finished):
 
@@ -87,7 +96,14 @@ def check(folder, images, steps):
         for k in steps.split(","):
             n_out = len(list((out / f"k{k}").rglob("*.png")))
             assert n_out == n_in, f"k{k}: {n_out} masks for {n_in} images"
-        print(f"check passed: {n_in} images -> masks for K = {steps}")
+        # a single image file as --input must work too (TA: "an entire folder / a single object")
+        one = next(f for f in sorted(Path(images).rglob("*"))
+                   if f.suffix.lower() in (".png", ".jpg", ".jpeg", ".tif", ".tiff"))
+        subprocess.run([sys.executable, "infer.py", "--input", str(one.resolve()),
+                        "--output", str(Path(tmp) / "one"), "--steps", steps], cwd=copy, check=True)
+        for k in steps.split(","):
+            assert (Path(tmp) / "one" / f"k{k}" / f"{one.stem}.png").is_file(), f"single image: no k{k} mask"
+        print(f"check passed: {n_in} images -> masks for K = {steps}; single image {one.name} too")
 
 
 def main(argv=None):

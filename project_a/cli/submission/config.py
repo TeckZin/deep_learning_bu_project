@@ -93,7 +93,9 @@ PRESETS = {
 
 # The preset build_refiner() uses when no config is given (staff predict.py, and
 # infer.py for checkpoints without stored config). Set this to the architecture you submit.
-ACTIVE = "attempt7"
+# With no config, build_refiner() turns image.use off: the staff runner's base never packs the
+# image into f. Our submission (infer.py) always passes the checkpoint's stored config.
+ACTIVE = "attempt10"
 
 
 def get_config(name=None):

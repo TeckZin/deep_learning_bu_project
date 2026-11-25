@@ -28,6 +28,8 @@ Rules required by predict.py / the tests:
   * pos_offset is a plain attribute (not a parameter or buffer, not in the checkpoint).
     train.py sets it to the crop position; inference never touches it (None = full tile).
 """
+from dataclasses import replace
+
 import torch
 from torch import nn
 
@@ -143,8 +145,14 @@ def build_refiner(feature_channels, cfg=None):
     """Entry point used by predict.py, infer.py, train.py and make_demo.py.
 
     cfg=None -> the ACTIVE preset in submission/config.py (the staff runner passes nothing).
+    The staff runner's base returns only its encoder features, never the packed image, so with
+    cfg=None the image CNN is turned off (image.use=False). Code that packs the image (train.py,
+    infer.py, examples.py) always passes the config explicitly.
     """
-    cfg = cfg or get_config()
+    if cfg is None:
+        cfg = get_config()
+        if cfg.image.use:
+            cfg = replace(cfg, image=replace(cfg.image, use=False))
     model_class = SpatialRefiner if cfg.memory.kind == "spatial" else Refiner
     return model_class(c_in=feature_channels, cfg=cfg)
 

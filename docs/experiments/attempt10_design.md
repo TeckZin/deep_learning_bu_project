@@ -7,9 +7,9 @@ Status: **trained on fold 0** (2026-11-20, commit `6f51784`). Results: `attempt1
 - Training recipe: `experiments/attempt10.json`. This is attempt8's recipe with `arch: attempt10` and `stress_aug` 0.
   `y0_aug` stays at 0.5 so later steps have damage to repair, and flips and rotations stay on.
 - The `attempt7` and `attempt6` presets and their weights do not change.
-- Submitting: the staff runner builds `ACTIVE` in `config.py`, which is still `"attempt7"`. Set it to
-  `"attempt10"` before packaging attempt10 weights.
-
+- Submitting: `ACTIVE = "attempt10"` in `config.py` (since 2026-11-25). The submission bundle is in
+  `attempt10_results.md` (Submission).
+  
 Goals: win back the edges (attempt7 BIoU 4.78) by giving the loop the full-resolution image, and make
 steps 2-4 useful by carrying a spatial memory between steps (the attempt8 TODO "spatial state" idea).
 
