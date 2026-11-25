@@ -208,7 +208,49 @@ def _panel_name(rank, image_id):
     return f"{rank:02d}_{image_id.replace('/', '_')}"
 
 
-def share(out, dest, title=None):
+def breakdown(scored, min_road=0.01):
+    """Markdown lines: where the refiner helps and hurts, H0 (K=0) -> K=4, by domain, road density and H0 quality.
+
+    Per-image means. The domain comes from the id prefix (urban/..., rural/...).
+    """
+    def mean(rs, key):
+        return sum(r[key] for r in rs) / len(rs)
+
+    def line(name, rs):
+        if not rs:
+            return None
+        q0, q4 = mean(rs, "q_k0"), mean(rs, "q_k4")
+        worse = 100 * sum(r["q_k4"] < r["q_k0"] - 1 for r in rs) / len(rs)
+        deltas = [mean(rs, f"{m}_k4") - mean(rs, f"{m}_k0") for m in ("iou", "cldice", "biou")]
+        return (f"| {name} | {len(rs)} | {q0:.1f} -> {q4:.1f} (**{q4 - q0:+.1f}**) | "
+                + " | ".join(f"{d:+.1f}" for d in deltas) + f" | {worse:.0f}% |")
+
+    road = [r for r in scored if r["road_frac"] >= min_road]
+    domain = lambda r: r["id"].split("/", 1)[0]
+    groups = []
+    for d in sorted({domain(r) for r in road}):
+        groups.append((d.capitalize(), [r for r in road if domain(r) == d]))
+    for d in sorted({domain(r) for r in road}):
+        for lo, hi, name in ((min_road, 0.03, "thin roads"), (0.03, 0.08, "medium roads"),
+                             (0.08, 1.01, "dense roads")):
+            groups.append((f"{d.capitalize()}, {name} ({100 * lo:.0f}-{min(100 * hi, 100):.0f}% road)",
+                           [r for r in road if domain(r) == d and lo <= r["road_frac"] < hi]))
+    for lo, hi in ((0, 20), (20, 40), (40, 60), (60, 101)):
+        groups.append((f"H0 quality {lo}-{min(hi, 100)}", [r for r in road if lo <= r["q_k0"] < hi]))
+    groups.append((f"Almost no road (< {100 * min_road:.0f}%)", [r for r in scored if r["road_frac"] < min_road]))
+
+    lines = ["## Where it helps and where it hurts", "",
+             f"Change from H0 (K=0) to K=4, as means of per-image scores. Images with under {100 * min_road:.0f}% road "
+             "are left out of every row but the last; there an empty truth and an empty prediction score 100, so "
+             "that row mostly measures removed false road. The last column is the share of images that get worse "
+             "by more than 1 point.", "",
+             "| Group | Images | Quality H0 -> K=4 | IoU | clDice | BIoU | Worse by >1 |",
+             "|---|---|---|---|---|---|---|"]
+    lines += [l for l in (line(name, rs) for name, rs in groups) if l]
+    return lines + [""]
+
+
+def share(out, dest, title=None, min_road=0.01):
     """Gallery for teammates from the panels, scores.csv and chosen.json in `out` (see module doc)."""
     with (out / "scores.csv").open() as fh:
         rows = {r["id"]: {k: (v if k == "id" else float(v)) for k, v in r.items()}
@@ -233,6 +275,7 @@ def share(out, dest, title=None):
              "- Prediction colors: white = road hit, red = false road, blue = missed road, black = background, "
              "gray = no-data.", "",
              "Categories: " + ", ".join(f"[{c}](#{c})" for c in chosen), ""]
+    lines += breakdown(scored, min_road)
 
     for cat, ids in chosen.items():
         folder = dest / cat
@@ -295,7 +338,7 @@ def main():
     if args.weights is None:
         if args.share is None:
             p.error("--weights and --h0 are required unless you only build a gallery with --share")
-        share(args.out, args.share, args.title)
+        share(args.out, args.share, args.title, args.min_road)
         return
     if args.h0 is None:
         p.error("--h0 is required with --weights")
@@ -339,7 +382,7 @@ def main():
         {cat: [r["id"] for r in picks] for cat, picks in chosen.items()}, indent=1))
     print(f"wrote {args.out}")
     if args.share:
-        share(args.out, args.share, args.title)
+        share(args.out, args.share, args.title, args.min_road)
 
 
 if __name__ == "__main__":

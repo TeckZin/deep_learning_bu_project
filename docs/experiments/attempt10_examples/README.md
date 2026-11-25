@@ -17,6 +17,26 @@ How to read a panel (three rows of four tiles):
 
 Categories: [worst](#worst), [best](#best), [improves](#improves), [no_gain](#no_gain), [late](#late), [uses_z](#uses_z)
 
+## Where it helps and where it hurts
+
+Change from H0 (K=0) to K=4, as means of per-image scores. Images with under 1% road are left out of every row but the last; there an empty truth and an empty prediction score 100, so that row mostly measures removed false road. The last column is the share of images that get worse by more than 1 point.
+
+| Group | Images | Quality H0 -> K=4 | IoU | clDice | BIoU | Worse by >1 |
+|---|---|---|---|---|---|---|
+| Rural | 217 | 50.3 -> 59.6 (**+9.3**) | +9.4 | +8.9 | +9.7 | 9% |
+| Urban | 310 | 53.9 -> 57.3 (**+3.4**) | +2.4 | +7.3 | +0.1 | 17% |
+| Rural, thin roads (1-3% road) | 126 | 46.2 -> 57.7 (**+11.5**) | +12.0 | +9.3 | +13.5 | 10% |
+| Rural, medium roads (3-8% road) | 57 | 52.9 -> 60.5 (**+7.6**) | +7.4 | +8.0 | +7.5 | 9% |
+| Rural, dense roads (8-100% road) | 34 | 60.9 -> 65.2 (**+4.3**) | +3.4 | +9.3 | -0.9 | 9% |
+| Urban, thin roads (1-3% road) | 46 | 39.4 -> 44.5 (**+5.1**) | +3.3 | +9.0 | +4.0 | 20% |
+| Urban, medium roads (3-8% road) | 93 | 48.7 -> 53.7 (**+5.1**) | +3.9 | +9.2 | +1.8 | 18% |
+| Urban, dense roads (8-100% road) | 171 | 60.7 -> 62.8 (**+2.0**) | +1.4 | +5.8 | -1.9 | 15% |
+| H0 quality 0-20 | 28 | 6.7 -> 20.2 (**+13.5**) | +12.6 | +21.4 | +3.9 | 14% |
+| H0 quality 20-40 | 82 | 32.2 -> 43.5 (**+11.2**) | +10.8 | +14.8 | +6.9 | 10% |
+| H0 quality 40-60 | 213 | 52.0 -> 57.6 (**+5.6**) | +4.6 | +7.5 | +5.5 | 13% |
+| H0 quality 60-100 | 204 | 67.3 -> 70.1 (**+2.8**) | +2.9 | +3.8 | +1.3 | 16% |
+| Almost no road (< 1%) | 312 | 41.0 -> 60.3 (**+19.3**) | +19.2 | +19.4 | +19.4 | 7% |
+
 ## worst
 
 Lowest quality at K=4.
