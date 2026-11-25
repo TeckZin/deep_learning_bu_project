@@ -1,9 +1,14 @@
 # attempt10: design decisions
 
-Status: **implemented, not trained** (2026-11-20). The architecture is the `attempt10` preset in
-`project_a/cli/submission/config.py` (class `SpatialRefiner` in `submission/model.py`); the training recipe is
-`experiments/attempt10.json` (attempt8's recipe with `arch: attempt10`, `stress_aug` set to 0, `y0_aug` kept at 0.5 so later steps have damage to repair; flips and rotations stay on). The `attempt7` and `attempt6` presets
-and their weights do not change.
+Status: **trained on fold 0** (2026-11-20, commit `6f51784`). Results: `attempt10_results.md`.
+
+- Architecture: the `attempt10` preset in `project_a/cli/submission/config.py` (class `SpatialRefiner` in
+  `submission/model.py`).
+- Training recipe: `experiments/attempt10.json`. This is attempt8's recipe with `arch: attempt10` and `stress_aug` 0.
+  `y0_aug` stays at 0.5 so later steps have damage to repair, and flips and rotations stay on.
+- The `attempt7` and `attempt6` presets and their weights do not change.
+- Submitting: the staff runner builds `ACTIVE` in `config.py`, which is still `"attempt7"`. Set it to
+  `"attempt10"` before packaging attempt10 weights.
 
 Goals: win back the edges (attempt7 BIoU 4.78) by giving the loop the full-resolution image, and make
 steps 2-4 useful by carrying a spatial memory between steps (the attempt8 TODO "spatial state" idea).
@@ -11,14 +16,14 @@ steps 2-4 useful by carrying a spatial memory between steps (the attempt8 TODO "
 ## One step
 
 ```
-initialize(f, y0):   z0 = tanh(Conv3x3([up(Conv1x1(LN(x))), p0]))       # no core call
+initialize(f, y0):   z0 = tanh(Conv3x3([up(Conv1x1(LN(x))), pool(p0)]))   # [B, 16, H/4, W/4], no core call
 step(f, z_t, y_t):
-    x, img    = unpack(f)                       # DINO features + RGB image packed in f
-    E         = ImageCNN(img)                   # full-res edge features (CNN inside the loop)
-    Tx, Ty, Tz = TokX(x, pool(E)), TokY(y_t), TokZ(z_t)                 # [B, N, d] each
-    tokens    = LN(Linear([LN(Tx) ; LN(Ty) ; LN(Tz)]))   # one fused token per patch
-    tokens    = core(tokens, pos)               # ONE call: 6 x [self-attn + 2D RoPE, FFN]
-    dy, z_t+1 = HeadCNN(tokens, y_t, z_t, E)    # full-res CNN writes both
+    x, img     = unpack(f)                      # DINO features + RGB image packed in f
+    Tx, Ty, Tz = TokX(LN(pool(x)), pool(E)), TokY(y_t), TokZ(z_t)       # [B, N, d] each
+    tokens     = LN(Linear([LN(Tx) ; LN(Ty) ; LN(Tz)]))                 # one fused token per patch
+    tokens     = core(tokens, rope)             # ONE call: 6 x pre-norm [self-attn + 2D RoPE, FFN], final LN
+    E          = ImageCNN(img)                  # [B, 24, H, W] full-res edge features (CNN inside the loop)
+    dy, z_t+1  = Head(tokens, y_t, z_t, E)      # full-res dilated CNN; dy gated, z GRU-updated
     return z_t+1, y_t + dy
 ```
 
@@ -45,20 +50,22 @@ Why not a decoder (state tokens cross-attending to image tokens Tx):
 ### 2. Core size: d=256, 8 heads, 6 layers, ff_mult 4
 | | params |
 |---|---|
-| Core (6 x `TransformerEncoderLayer(256, 8, 1024)` + final norm) | 4,739,072 (cap 5,000,000) |
-| Rest of the refiner (estimate) | about 0.7M |
-| Total (estimate) | about 5.4M (cap 10,000,000) |
+| Core (6 x `RopeEncoderLayer(256, 8, 1024)` + final LayerNorm) | 4,739,072 (cap 5,000,000) |
+| Rest (image CNN, tokenizers, memory init, head) | 929,138 |
+| Total | 5,668,210 (cap 10,000,000) |
 
 - Head dim 32: divisible by 4 for 2D RoPE, and works with fused attention.
 - With 6 layers, ff_mult 4 still fits (ff 3 would be 3.95M). 4 is the standard ViT ratio.
-- RoPE has no parameters. Layers are still built from PyTorch modules, but attention is hand-written on
-  `F.scaled_dot_product_attention` so RoPE can rotate Q and K.
+- Layers are pre-norm with GELU and dropout 0.05. `RopeEncoderLayer` has the same parameters as
+  `nn.TransformerEncoderLayer`, but its attention is written by hand on `F.scaled_dot_product_attention`
+  so RoPE can rotate Q and K. RoPE has no parameters.
 
 ### 3. 2D positional encoding: RoPE on Q and K
 - The additive 2D sinusoidal code (`pos.py`) stays available (`core.pos = add | rope | both`). attempt10
   uses `rope`.
 - RoPE: half of each head's dimensions rotate by row, half by column. Attention then depends on the
-  relative position of two patches.
+  relative position of two patches. Base 100 instead of 10000, because the grid is at most 64 cells.
+- With `rope`, no additive position code is added to the tokens.
 - It uses `model.pos_offset` like the additive code, so training crops keep their true tile positions.
 
 ### 4. The original image inside the loop
@@ -91,8 +98,9 @@ with the features.
   (about +3 MB per 1024 tile). Stage 2 (refine) packs it into `f` before the loop.
 - `build_refiner(feature_channels)` gets 1152 and knows from the config that the last 768 are the image.
 
-**What uses the image: the image CNN.** 3 conv layers (3x3, 24 channels) at full resolution, no
-downsampling, run once per `step()`, give edge features `E` [B, 24, H, W]. `E` is used twice:
+**What uses the image: the image CNN.** 3 conv layers (3x3, 24 channels, GELU) at full resolution, no
+downsampling, give edge features `E` [B, 24, H, W]. They run on the ImageNet-normalized image inside every
+`step()`. The image is the same each step, so this recomputes the same `E`. `E` is used twice:
 - in the head CNN, next to the coarse `dy` and `p`: this is where road boundaries are drawn, so it is
   the main use;
 - average-pooled to the patch grid and concatenated to the DINO channels before the TokX MLP, so `Tx`
@@ -107,10 +115,24 @@ still change the output clearly.
 - z_t is `[B, Cz, H/s, W/s]` with **Cz = 16, s = 4** (256x256 on a full tile). It replaces the 32 memory
   slots. `s = 1` (full resolution) is one config field away. It costs about 16x the memory when
   backpropagating through K steps.
-- Update, ConvGRU style (as in RAFT): the head CNN outputs `1 + 2*Cz` channels (dy, gate u, candidate c)
-  and `z_t+1 = (1 - u) * z_t + u * tanh(c)`. This keeps z bounded for any K.
 - z0 comes from the frozen encoder output plus H0's answer (above), like RAFT's context-initialized hidden
-  state. The last conv starts small (not zero), so `reset-state` still has an effect.
+  state. It is kept in float32 under autocast, like y.
+
+### 5b. Head: one full-resolution CNN writes dy and z
+`SpatialHead` (`submission/output_heads.py`):
+1. Coarse dy: each core token becomes its 16x16 block of logits through `Linear(256, 256)` and
+   `pixel_shuffle`. 16 more channels of each token (`ctx`) are upsampled bilinearly.
+2. Stack: 5 dilated 3x3 convs (dilations 1, 2, 4, 8, 1; 64 channels; GELU) at full resolution. The input is
+   `[coarse dy, p_t, ctx (16), E (24), up(z_t) (16)]`, 58 channels in all.
+3. dy: a 3x3 conv on the stack features gives `r, g`, and `dy = (coarse + r) * sigmoid(g + 2)` (gated, as attempt7).
+4. z: the stack features are average-pooled to z's grid (H/4) and concatenated with `z_t`. A 3x3 conv on
+   that gives `u, c` (Cz channels each). The update is ConvGRU style (as in RAFT):
+   `z_t+1 = (1 - u) * z_t + u * tanh(c)`, with `u = sigmoid(.)`. This keeps z bounded for any K.
+
+Initialization: the token projection starts small (std 0.01), and the dy conv starts at zero (r = 0,
+gate about 0.88). So the untrained refiner stays near y0 but every step still changes the mask. The z conv
+uses PyTorch's default initialization, so z changes from the start. That is why `reset-state` has an
+effect even before training.
 - Global context now comes only from self-attention over all patches. If long-range connectivity
   (clDice) drops compared with attempt7, add a few global register tokens (`memory.registers`).
 
@@ -184,8 +206,10 @@ would save only about 0.1M parameters.
 Parameters (`python -m submission.model`, 384 DINO channels + 768 packed image channels):
 core 4,739,072, total 5,668,210.
 
-## Check when it trains
-- [ ] K=4 clearly above K=1 (the loop is used, unlike attempt7)
-- [ ] BIoU at K=4 above the baseline's (about 8), up from 4.78
-- [ ] clDice still near attempt7's 71
-- [ ] `reset-state` and `no-mask-feedback` ablations change the output a lot (no CNN bypass)
+## Checks after the fold-0 run (details in `attempt10_results.md`)
+- [ ] K=4 clearly above K=1: **no.** K=1 59.59, K=4 59.86 (+0.27). Almost all of the gain still comes
+  from step 1.
+- [x] BIoU at K=4 above the baseline's (about 8): **yes.** 10.55, compared with H0's 10.06 on this fold.
+- [x] clDice still near attempt7's 71: **yes.** 82.66 (H0 72.40).
+- [~] `reset-state` and `no-mask-feedback` change the output: **moderately.** On 50 tiles K=4 scores 63.06,
+  reset-state 60.12 and no-mask-feedback 60.75. The state matters, but the drop is not large.

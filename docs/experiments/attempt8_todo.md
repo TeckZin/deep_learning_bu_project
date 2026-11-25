@@ -35,7 +35,6 @@ Goal: keep attempt7's connectivity gain (clDice 71.2) and win back the edges.
 
 ## For the report
 - [ ] Record K=0/1/2/4 + stress, and IoU / clDice / BIoU, for attempts 6, 7, 8
-- [ ] Retrain on the staff baseline once it is released
 
 ## Notes: attempt7, what is good
 - First run where the refiner beats the baseline on validation:
@@ -58,7 +57,6 @@ Goal: keep attempt7's connectivity gain (clDice 71.2) and win back the edges.
 - No validation during training, so we do not know if epoch 40 was the best
   or if the late epochs only memorized the training tiles.
 - Six things changed at once, so we cannot say which change produced the gain.
-- Trained on the DINOv2 stand-in, so it cannot be the leaderboard entry.
 
 ## Notes: the boundary problem
 - Boundary IoU is 20% of quality. It compares only a 3-pixel band along road edges,
