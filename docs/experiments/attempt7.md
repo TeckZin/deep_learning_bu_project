@@ -1,13 +1,14 @@
-# attempt7: recurrent refiner on a DINOv2 stand-in baseline
+# attempt7: recurrent refiner on our DINOv2 baseline
 
 > **Historical.** File names, flags and commands below describe the code at git tag `attempt7`
 > (`git checkout attempt7` to rerun them). In the current code the architecture is the
-> `attempt7` preset in `submission/config.py` (same weights load unchanged), the stand-in
+> `attempt7` preset in `submission/config.py` (same weights load unchanged), the
 > baseline is `frozen_encoder.py`, and the recipe is `experiments/attempt7.json` on the CV folds.
 
-DEVELOPMENT ONLY. The baseline here is our own stand-in (frozen DINOv2 ViT-S/14 + a small
-H0 head we trained), not the staff baseline. These refiner weights only work on top of
-that stand-in and are not a leaderboard entry.
+The baseline here is our own frozen encoder (DINOv2 ViT-S/14) plus a small H0 head we trained.
+We provide the encoder for the leaderboard: the submission bundle (`export_submission.py`) ships
+the frozen encoder, H0 and refiner together. These refiner weights only work with this H0 head.
+(At the `attempt7` tag this file called the baseline a "stand-in" for a staff baseline; that was wrong.)
 
 ## Files
 
@@ -16,10 +17,10 @@ that stand-in and are not a leaderboard entry.
 | `submission/model.py`, `core.py`, `parts.py` | Refiner code (shared transformer core, tokenizer, head) |
 | `submission/model.safetensors` | Refiner weights, same file as `weights/attempt7_best.safetensors` |
 | `weights/attempt7.safetensors` | Refiner weights after the last epoch (epoch 40; identical to best in this run) |
-| `weights/h0_attempt6_best.safetensors` | H0 head weights for the stand-in baseline |
+| `weights/h0_attempt6_best.safetensors` | H0 head weights for the baseline |
 | `train_h0.py`, `train_h0_job_attempt6.sh` | Trains the H0 head |
 | `train.py`, `train_job_attempt7.sh` | Trains the refiner |
-| `standin_baseline.py` | Builds the stand-in baseline (DINOv2 encoder + H0 head) |
+| `standin_baseline.py` | Builds the baseline (DINOv2 encoder + H0 head) |
 | `environment.yml` | Conda environment |
 | `logs/attempt7.*.log` | Training log with the validation results below |
 

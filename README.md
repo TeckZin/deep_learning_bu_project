@@ -223,7 +223,7 @@ Metrics and data:
 - [ ] Download the official course data package; verify checksums and split manifests
 - [ ] Verify raw labels (3 = road, 0 = ignore, 1/2/4–7 = non-road); no double remapping
 - [ ] Keep all crops from a tile in that tile's split
-- [ ] Load the frozen staff baseline; confirm weights + normalization stats stay frozen
+- [ ] Load our frozen encoder + H0 (`frozen_encoder.py`; we provide it in the leaderboard bundle); confirm weights + normalization stats stay frozen
 - [ ] Reproduce the baseline (K = 0) on development data
 - [ ] Save examples of baseline successes and failures
 

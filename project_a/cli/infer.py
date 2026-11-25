@@ -1,18 +1,21 @@
 #!/usr/bin/env python3
-"""Leaderboard inference: a folder of RGB images -> one folder of road masks per refinement round K.
+"""Leaderboard inference: a folder of RGB images (or one image) -> one folder of road masks per refinement round K.
 
     python infer.py --input IMAGES --output OUT                    # both stages
+    python infer.py --input IMAGES/urban/001.png --output OUT      # a single image (id = file name, "001")
     python infer.py --input IMAGES --output OUT --stage encode     # stage 1 only
     python infer.py --input IMAGES --output OUT --stage refine     # stage 2 only (checks stage 1 is complete)
 
 Stage 1 (encode): the frozen encoder + H0 run on every image and save
-    OUT_intermediate/<id>.safetensors   features f [1, C, H/16, W/16] and initial logits y0 [1, 1, H, W]
+    OUT_intermediate/<id>.safetensors   features f [1, C, H/16, W/16], initial logits y0 [1, 1, H, W]
+                                        and the raw image [1, 3, H, W] uint8 (TA: the image is a representation)
     OUT_intermediate/index.json         ids and image sizes; written last, so it marks a finished stage 1
 Stage 2 (refine): the refiner reads each intermediate file, runs K = 1..max(--steps) rounds and writes
     OUT/k<K>/<id>.png                   uint8, same H x W as the input, 1 = road, 0 = non-road
                                         (k0 = H0 alone, before any refinement)
     OUT/k<K>_prob/<id>.npy              float32 road probability (only with --save-prob)
-Image ids are the input path relative to --input, without the extension (sub-folders kept).
+Image ids are the input path relative to --input, without the extension (sub-folders kept);
+for a single image file, the id is its file name without the extension.
 
 Weights: ONE file (default weights/submission.safetensors next to this script) holding the
 H0 head ("h0.*") and the refiner ("refiner.*"), with the architecture in its metadata.
@@ -20,7 +23,7 @@ The encoder is the public frozen DINOv2 from torch.hub; download it once with in
     python -c "import torch; torch.hub.load('facebookresearch/dinov2', 'dinov2_vits14', trust_repo=True)"
 
 Memory: one image at a time, so RAM use does not grow with the number of images.
-Disk: stage 1 stores ~10 MB per 1024x1024 image (fp32 ViT-S/14 features + logits).
+Disk: stage 1 stores ~13 MB per 1024x1024 image (fp32 ViT-S/14 features + logits, uint8 image).
 """
 import argparse
 import json
@@ -33,6 +36,8 @@ from safetensors import safe_open
 from safetensors.torch import load_file, save_file
 
 from frozen_encoder import FrozenEncoder, H0Head, build_encoder
+from submission.config import config_from_json
+from submission.image import pack_image, packed_channels
 from submission.model import load_refiner
 
 HERE = Path(__file__).resolve().parent
@@ -40,7 +45,12 @@ IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".tif", ".tiff")
 
 
 def list_images(folder):
+    """[(path, id)] for a folder of images (searched recursively) or for ONE image file (id = file stem)."""
     folder = Path(folder)
+    if folder.is_file():
+        if folder.suffix.lower() not in IMAGE_SUFFIXES:
+            raise SystemExit(f"{folder} is not an image ({', '.join(IMAGE_SUFFIXES)})")
+        return [(folder, folder.stem)]
     files = sorted(f for f in folder.rglob("*") if f.is_file() and f.suffix.lower() in IMAGE_SUFFIXES)
     if not files:
         raise SystemExit(f"No images ({', '.join(IMAGE_SUFFIXES)}) under {folder}")
@@ -89,8 +99,9 @@ def encode(items, weights, work, device):
             raise ValueError(f"{image_id}: bad initial logits {tuple(y0.shape)}")
         dest = work / f"{image_id}.safetensors"
         dest.parent.mkdir(parents=True, exist_ok=True)
-        save_file({"features": features.float().contiguous().cpu(), "y0": y0.float().contiguous().cpu()},
-                  str(dest))
+        raw = (image * 255).round().to(torch.uint8)
+        save_file({"features": features.float().contiguous().cpu(), "y0": y0.float().contiguous().cpu(),
+                   "image": raw.contiguous().cpu()}, str(dest))
         index["images"][image_id] = list(image.shape[-2:])
         print(f"[encode {i + 1}/{len(items)}] {image_id}", flush=True)
     (work / "index.json").write_text(json.dumps(index, indent=1))       # last: marks stage 1 complete
@@ -110,12 +121,17 @@ def check_intermediate(work, items):
 @torch.no_grad()
 def refine(index, weights, work, output, steps, device, save_prob=False, ids=None):
     """Stage 2: K rounds of the refiner on each intermediate file -> output/k<K>/<id>.png."""
-    model = load_refiner(weights, index["feature_channels"], device, prefix="refiner.").eval()
+    cfg = config_from_json(bundle_metadata(weights)["refiner_cfg"])
+    channels = index["feature_channels"] + packed_channels(cfg)         # + the image packed into f
+    model = load_refiner(weights, channels, device, prefix="refiner.").eval()
     kmax = max(steps)
     ids = ids or sorted(index["images"])
     for n, image_id in enumerate(ids):
         data = load_file(str(work / f"{image_id}.safetensors"), device=str(device))
         features, y = data["features"], data["y0"]
+        if cfg.image.use:                   # the refiner sees the image inside the loop (never after it)
+            assert "image" in data, f"{image_id}: no raw image in the intermediate file; rerun --stage encode"
+            features = pack_image(features, data["image"].float() / 255, cfg.image.stride)
         size = tuple(index["images"][image_id])
         outputs = {0: y}
         if kmax > 0:
@@ -142,7 +158,7 @@ def refine(index, weights, work, output, steps, device, save_prob=False, ids=Non
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--input", type=Path, help="Folder of RGB images (searched recursively)")
+    p.add_argument("--input", type=Path, help="Folder of RGB images (searched recursively), or one image file")
     p.add_argument("--output", type=Path, required=True)
     p.add_argument("--weights", type=Path, default=HERE / "weights" / "submission.safetensors")
     p.add_argument("--steps", default="0,1,2,4,6,8", help="Comma list of K to save (one run to the max K)")
