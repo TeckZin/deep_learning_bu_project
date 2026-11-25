@@ -4,6 +4,8 @@
 #   e.g. qsub jobs/examples.sh fdzeolla-attempt10 0
 # Reads weights/RUN/foldFOLD/refiner_best.safetensors and the H0 head from its run.json (eval_h0).
 # Writes weights/RUN/foldFOLD/examples/ (scores.csv, one folder of PNGs per category).
+# Add  --share DIR --title "..."  for a small gallery to commit (README.md + JPEGs); it can also be
+# built later without a GPU:  python examples.py --out DIR/examples --share ../../docs/experiments/NAME
 #$ -P ec523kb
 #$ -N examples
 #$ -l h_rt=03:00:00

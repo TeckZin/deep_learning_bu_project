@@ -27,6 +27,13 @@ gray = no-data (ignored by the metrics).
     python examples.py ... --from-csv examples/attempt10_f0/scores.csv   # redraw without rescoring
 
 Outputs in --out: scores.csv (one row per image), <category>/<rank>_<id>.png, chosen.json.
+
+Sharing (--share DIR): a small copy for the repo, which GitHub shows as a gallery. DIR gets README.md
+(summary, one section per category with a score table and the panels inline) and
+<category>/<rank>_<id>.jpg (JPEG, about 100-200 KB instead of 500 KB). Without --weights it only builds the gallery from the panels already in --out:
+
+    python examples.py --out examples/attempt10_f0 --share ../../docs/experiments/attempt10_examples \
+        --title "attempt10, fold 0"
 """
 import argparse
 import csv
@@ -50,7 +57,16 @@ from submission.model import build_refiner
 
 KS = (0, 1, 2, 4)
 CATEGORIES = ("worst", "best", "improves", "no_gain", "late", "uses_z")
+DESCRIPTIONS = {
+    "worst": "Lowest quality at K=4.",
+    "best": "Highest quality at K=4.",
+    "improves": "Largest gain from K=0 (H0) to K=4.",
+    "no_gain": "Smallest gain from K=0 to K=4 (the refiner makes these worse).",
+    "late": "Largest gain from K=1 to K=4, i.e. where steps 2-4 matter most.",
+    "uses_z": "Most K=4 pixels flip when the memory z is reset before every step.",
+}
 TILE = 384          # panel tile size in pixels
+SHARE_QUALITY = 88  # JPEG quality of the shared panels: about 100 KB each, captions stay sharp
 
 
 @torch.no_grad()
@@ -186,6 +202,65 @@ def panel(row, image, labels, outputs):
     return out
 
 
+# ---- sharing ----
+
+def _panel_name(rank, image_id):
+    return f"{rank:02d}_{image_id.replace('/', '_')}"
+
+
+def share(out, dest, title=None):
+    """Gallery for teammates from the panels, scores.csv and chosen.json in `out` (see module doc)."""
+    with (out / "scores.csv").open() as fh:
+        rows = {r["id"]: {k: (v if k == "id" else float(v)) for k, v in r.items()}
+                for r in csv.DictReader(fh)}
+    chosen = json.loads((out / "chosen.json").read_text())
+    dest.mkdir(parents=True, exist_ok=True)
+
+    scored = list(rows.values())
+    mean = {k: sum(r[k] for r in scored) / len(scored) for k in ("q_k0", "q_k1", "q_k2", "q_k4", "q_reset")}
+    lines = [f"# Example panels: {title or out.name}", "",
+             f"Made by `project_a/cli/examples.py --share` ({len(scored)} validation images scored; "
+             "the full-size PNGs and scores.csv stay with the run on SCC). Quality = 0.5 IoU + 0.3 clDice + 0.2 Boundary IoU, per image, in percent.", "",
+             "| Mean of per-image quality | K=0 (H0) | K=1 | K=2 | K=4 | K=4, z reset |", "|---|---|---|---|---|---|",
+             "| All scored images | " + " | ".join(f"{mean[k]:.1f}" for k in mean) + " |", "",
+             "This averages each image's own score, so near-empty images count as much as busy ones. The "
+             "fold metric in the results docs counts pixels over all images together and is different.", "",
+             "How to read a panel (three rows of four tiles):", "",
+             "- Row 1: image, truth (LoveDA classes, road = yellow), prediction at K=0 and K=1.",
+             "- Row 2: prediction at K=2, K=4, K=4 with z reset before every step, and how much the road "
+             "probability changes when z is reset (black = no change, orange = large).",
+             "- Row 3: road probability at K=0, 1, 2, 4 (dark purple = 0, yellow = 1).",
+             "- Prediction colors: white = road hit, red = false road, blue = missed road, black = background, "
+             "gray = no-data.", "",
+             "Categories: " + ", ".join(f"[{c}](#{c})" for c in chosen), ""]
+
+    for cat, ids in chosen.items():
+        folder = dest / cat
+        folder.mkdir(exist_ok=True)
+        for rank, image_id in enumerate(ids, 1):
+            name = _panel_name(rank, image_id)
+            im = Image.open(out / cat / f"{name}.png").convert("RGB")
+            im.save(folder / f"{name}.jpg", quality=SHARE_QUALITY, optimize=True)
+
+        lines += [f"## {cat}", "", DESCRIPTIONS.get(cat, ""), "",
+                  "| # | Image | K=0 | K=1 | K=2 | K=4 | K=4 z reset | K=4 IoU | K=4 clDice | K=4 BIoU "
+                  "| z flip % | Road % |",
+                  "|---|---|---|---|---|---|---|---|---|---|---|---|"]
+        for rank, image_id in enumerate(ids, 1):
+            r = rows[image_id]
+            cells = [r["q_k0"], r["q_k1"], r["q_k2"], r["q_k4"], r["q_reset"],
+                     r["iou_k4"], r["cldice_k4"], r["biou_k4"], r["z_flip"], 100 * r["road_frac"]]
+            link = f"[{image_id}]({cat}/{_panel_name(rank, image_id)}.jpg)"
+            lines.append(f"| {rank} | {link} | " + " | ".join(f"{c:.1f}" for c in cells) + " |")
+        lines.append("")
+        for rank, image_id in enumerate(ids, 1):
+            name = _panel_name(rank, image_id)
+            lines += [f"**{rank}. {image_id}**", "", f"![{image_id}]({cat}/{name}.jpg)", ""]
+
+    (dest / "README.md").write_text("\n".join(lines))
+    print(f"shared gallery: {dest}/README.md")
+
+
 # ---- main ----
 
 def load_model(weights, h0, device):
@@ -203,8 +278,8 @@ def load_model(weights, h0, device):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--weights", type=Path, required=True, help="refiner .safetensors from train.py")
-    p.add_argument("--h0", type=Path, required=True, help="H0 head used for validation (run.json eval_h0)")
+    p.add_argument("--weights", type=Path, help="refiner .safetensors from train.py (omit to only --share)")
+    p.add_argument("--h0", type=Path, help="H0 head used for validation (run.json eval_h0)")
     p.add_argument("--val-fold", type=int, default=0)
     p.add_argument("--folds", type=Path, default=DEFAULT_FOLDS)
     p.add_argument("--data-root", type=Path, default=default_data_root())
@@ -214,7 +289,16 @@ def main():
     p.add_argument("--max-images", type=int, help="score only the first N validation images")
     p.add_argument("--from-csv", type=Path, help="reuse scores.csv instead of scoring again")
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    p.add_argument("--share", type=Path, help="also write a small gallery for the repo here (README.md + JPEGs)")
+    p.add_argument("--title", help="gallery title, e.g. 'attempt10, fold 0' (default: the --out folder name)")
     args = p.parse_args()
+    if args.weights is None:
+        if args.share is None:
+            p.error("--weights and --h0 are required unless you only build a gallery with --share")
+        share(args.out, args.share, args.title)
+        return
+    if args.h0 is None:
+        p.error("--h0 is required with --weights")
     if args.data_root is None:
         p.error("--data-root or $ROADSEG_DATA is required")
 
@@ -248,13 +332,14 @@ def main():
             r = by_id[row["id"]]
             image = load_image(r["image"])[None]
             outputs = run_image(model, base, image.to(device))
-            name = f"{rank:02d}_{row['id'].replace('/', '_')}.png"
-            panel(row, image, _labels(r), outputs).save(folder / name)
+            panel(row, image, _labels(r), outputs).save(folder / f"{_panel_name(rank, row['id'])}.png")
         print(f"{cat}: " + ", ".join(f"{r['id']} (q4 {r['q_k4']:.1f}, q0 {r['q_k0']:.1f}, "
                                      f"flip {r['z_flip']:.1f}%)" for r in picks), flush=True)
     (args.out / "chosen.json").write_text(json.dumps(
         {cat: [r["id"] for r in picks] for cat, picks in chosen.items()}, indent=1))
     print(f"wrote {args.out}")
+    if args.share:
+        share(args.out, args.share, args.title)
 
 
 if __name__ == "__main__":

@@ -129,6 +129,10 @@ helped by steps 2-4, and most z-dependent images. Rankings skip images with unde
 
     qsub jobs/examples.sh fdzeolla-attempt10 0        # -> weights/fdzeolla-attempt10/fold0/examples/
 
+Gallery to browse on GitHub (JPEG copies of the panels, score tables):
+[`attempt10_examples/`](attempt10_examples/README.md). Built with
+`python examples.py --out <examples dir> --share ../../docs/experiments/attempt10_examples --title "attempt10, fold 0"`.
+
 Of the 527 images with at least 1% road:
 - K=0 -> K=4: 368 improve by more than 1 point and 72 get worse; the median change is +3.8.
 - K=1 -> K=4: 104 improve and 39 get worse.
